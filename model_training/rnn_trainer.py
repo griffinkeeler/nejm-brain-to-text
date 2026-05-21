@@ -11,6 +11,7 @@ import logging
 import sys
 import json
 import pickle
+from contextlib import nullcontext
 
 from dataset import BrainToTextDataset, train_test_split_indicies
 from data_augmentations import gauss_smooth
@@ -40,6 +41,8 @@ class BrainToTextDecoder_Trainer:
         self.args = args
         self.logger = None 
         self.device = None
+        self.use_amp = False
+        self.enable_torch_compile = False
         self.model = None
         self.optimizer = None
         self.learning_rate_scheduler = None
@@ -108,6 +111,17 @@ class BrainToTextDecoder_Trainer:
 
         self.logger.info(f'Using device: {self.device}')
 
+        self.use_amp = bool(self.args.get('use_amp', False) and self.device.type == 'cuda')
+        if self.args.get('use_amp', False) and not self.use_amp:
+            self.logger.info("Disabling AMP because CUDA is not available")
+
+        self.enable_torch_compile = bool(
+            self.args.get('use_torch_compile', self.device.type == 'cuda')
+        )
+        if self.enable_torch_compile and self.device.type != 'cuda':
+            self.logger.info("Disabling torch.compile because CUDA is not available")
+            self.enable_torch_compile = False
+
 
 
         # Set seed if provided 
@@ -129,9 +143,15 @@ class BrainToTextDecoder_Trainer:
             patch_stride = self.args['model']['patch_stride'],
         )
 
-        # Call torch.compile to speed up training
-        self.logger.info("Using torch.compile")
-        self.model = torch.compile(self.model)
+        if self.enable_torch_compile:
+            try:
+                self.logger.info("Using torch.compile")
+                self.model = torch.compile(self.model)
+            except Exception as e:
+                self.logger.warning(f"torch.compile unavailable; falling back to eager mode: {e}")
+                self.enable_torch_compile = False
+        else:
+            self.logger.info("Using eager mode (torch.compile disabled)")
 
         self.logger.info(f"Initialized RNN decoding model")
 
@@ -199,7 +219,7 @@ class BrainToTextDecoder_Trainer:
             batch_size = None, # Dataset.__getitem__() already returns batches
             shuffle = self.args['dataset']['loader_shuffle'],
             num_workers = self.args['dataset']['num_dataloader_workers'],
-            pin_memory = True 
+            pin_memory = self.device.type == 'cuda'
         )
 
         # val dataset and dataloader
@@ -218,7 +238,7 @@ class BrainToTextDecoder_Trainer:
             batch_size = None, # Dataset.__getitem__() already returns batches
             shuffle = False, 
             num_workers = 0,
-            pin_memory = True 
+            pin_memory = self.device.type == 'cuda'
         )
 
         self.logger.info("Successfully initialized datasets")
@@ -286,10 +306,15 @@ class BrainToTextDecoder_Trainer:
             betas = (self.args['beta0'], self.args['beta1']),
             eps = self.args['epsilon'],
             weight_decay = self.args['weight_decay'],
-            fused = True
+            fused = self.device.type == 'cuda'
         )
 
         return optim 
+
+    def _autocast_context(self):
+        if not self.use_amp:
+            return nullcontext()
+        return torch.autocast(device_type=self.device.type, dtype=torch.bfloat16)
 
     def create_cosine_lr_scheduler(self, optim):
         lr_max = self.args['lr_max']
@@ -524,7 +549,7 @@ class BrainToTextDecoder_Trainer:
             day_indicies = batch['day_indicies'].to(self.device)
 
             # Use autocast for efficiency
-            with torch.autocast(device_type = "cuda", enabled = self.args['use_amp'], dtype = torch.bfloat16):
+            with self._autocast_context():
 
                 # Apply augmentations to the data
                 features, n_time_steps = self.transform_data(features, n_time_steps, 'train')
@@ -701,7 +726,7 @@ class BrainToTextDecoder_Trainer:
             
             with torch.no_grad():
 
-                with torch.autocast(device_type = "cuda", enabled = self.args['use_amp'], dtype = torch.bfloat16):
+                with self._autocast_context():
                     features, n_time_steps = self.transform_data(features, n_time_steps, 'val')
 
                     adjusted_lens = ((n_time_steps - self.args['model']['patch_size']) / self.args['model']['patch_stride'] + 1).to(torch.int32)
