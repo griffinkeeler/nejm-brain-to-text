@@ -115,7 +115,8 @@ with tqdm(total=total_test_trials, desc='Predicting phoneme sequences', unit='tr
             neural_input = np.expand_dims(neural_input, axis=0)
 
             # convert to torch tensor
-            neural_input = torch.tensor(neural_input, device=device, dtype=torch.bfloat16)
+            neural_input_dtype = torch.bfloat16 if device.type == 'cuda' else torch.float32
+            neural_input = torch.tensor(neural_input, device=device, dtype=neural_input_dtype)
 
             # run decoding step
             logits = runSingleDecodingStep(neural_input, input_layer, model, model_args, device)
