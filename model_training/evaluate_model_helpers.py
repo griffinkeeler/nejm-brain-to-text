@@ -3,8 +3,9 @@ import numpy as np
 import h5py
 import time
 import re
+from contextlib import nullcontext
 
-from data_augmentations import gauss_smooth
+from model_training.data_augmentations import gauss_smooth
 
 LOGIT_TO_PHONEME = [
     'BLANK',
@@ -85,9 +86,14 @@ def rearrange_speech_logits_pt(logits):
 # single decoding step function.
 # smooths data and puts it through the model.
 def runSingleDecodingStep(x, input_layer, model, model_args, device):
+    use_amp = bool(model_args.get('use_amp', False) and device.type == 'cuda')
+    autocast_context = (
+        torch.autocast(device_type=device.type, dtype=torch.bfloat16)
+        if use_amp else nullcontext()
+    )
 
     # Use autocast for efficiency
-    with torch.autocast(device_type = "cuda", enabled = model_args['use_amp'], dtype = torch.bfloat16):
+    with autocast_context:
 
         x = gauss_smooth(
             inputs = x, 
