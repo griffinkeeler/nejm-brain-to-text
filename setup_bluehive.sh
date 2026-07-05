@@ -1,4 +1,7 @@
 #!/bin/bash
+#SBATCH --job-name=setup
+#SBATCH --output=logs/setup-%j.out
+#SBATCH --error=logs/setup-%j.err
 
 set -euo pipefail
 
