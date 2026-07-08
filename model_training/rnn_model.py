@@ -1,5 +1,6 @@
-import torch 
+import torch
 from torch import nn
+import torch.nn.functional as F
 
 class GRUDecoder(nn.Module):
     '''
@@ -139,83 +140,68 @@ class GRUDecoder(nn.Module):
         return input_lengths.to(torch.int32)
 
 
-class ResidualConv1d(nn.Module):
-    """Residual dilated convolution for tracking short and long range
-    temporal patterns."""
-    def __init__(self, channels, kernel_size=3, dilation=1):
+class ChannelLayerNorm(nn.Module):
+    """LayerNorm over channels for channel-first temporal tensors."""
+    def __init__(self, channels):
         super().__init__()
+        self.norm = nn.LayerNorm(channels)
 
-        padding = (kernel_size // 2) * dilation
+    def forward(self, x):
+        return self.norm(x.transpose(1, 2)).transpose(1, 2)
 
-        self.net = nn.Sequential(
-            nn.Conv1d(
-                in_channels=channels,
-                out_channels=channels,
-                kernel_size=kernel_size,
-                padding=padding,
-                dilation=dilation,
-            ),
-            nn.BatchNorm1d(channels),
-            nn.GELU(),
+
+class CausalConv1d(nn.Module):
+    """1D convolution with left padding so each timestep only sees the past."""
+    def __init__(self, in_channels, out_channels, kernel_size=3, dilation=1, groups=1):
+        super().__init__()
+        self.left_padding = (kernel_size - 1) * dilation
+        self.conv = nn.Conv1d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            groups=groups,
         )
 
     def forward(self, x):
-        # Keeps the original signal (residual connection)
-        # While also adding new learned correction
-        return x + self.net(x)
+        x = F.pad(x, (self.left_padding, 0))
+        return self.conv(x)
 
 
-class GLUConv1d(nn.Module):
-    """Gated linear unit layer that determines how strongly the learned
-    features should pass through."""
-    def __init__(self, channels, kernel_size=3):
+class CompactTemporalBlock(nn.Module):
+    """Compact causal TCN block with depthwise temporal mixing."""
+    def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.0, expansion_factor=2):
         super().__init__()
 
-        padding = kernel_size // 2
+        expanded_channels = channels * expansion_factor
 
-        self.net = nn.Sequential(
-            nn.Conv1d(
-                in_channels=channels,
-                out_channels=2 * channels,
-                kernel_size=kernel_size,
-                padding=padding,
-            ),
-            nn.GLU(dim=1),
+        self.norm1 = ChannelLayerNorm(channels)
+        self.depthwise = CausalConv1d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            groups=channels,
         )
+        self.pointwise_in = nn.Conv1d(channels, expanded_channels, kernel_size=1)
+        self.pointwise_out = nn.Conv1d(expanded_channels, channels, kernel_size=1)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+        self.norm2 = ChannelLayerNorm(channels)
 
     def forward(self, x):
-        return self.net(x)
+        residual = x
 
+        x = self.norm1(x)
+        x = self.depthwise(x)
+        x = self.activation(x)
+        x = self.pointwise_in(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.pointwise_out(x)
+        x = self.dropout(x)
 
-class TemporalBlock(nn.Module):
-    """Residual dilation convolution block with increasing dilation.
-    GLU is implemented at the end to determine how much of each feature
-    should be passed forward."""
-    def __init__(self, channels=512, kernel_size=3, dilation1=1, dilation2=2):
-        super().__init__()
-
-        self.res1 = ResidualConv1d(
-            channels=channels,
-            kernel_size=kernel_size,
-            dilation=dilation1,
-        )
-
-        self.res2 = ResidualConv1d(
-            channels=channels,
-            kernel_size=kernel_size,
-            dilation=dilation2,
-        )
-
-        self.glu = GLUConv1d(
-            channels=channels,
-            kernel_size=kernel_size,
-        )
-
-    def forward(self, x):
-        x = self.res1(x)
-        x = self.res2(x)
-        x = self.glu(x)
-        return x
+        return self.norm2(residual + x)
 
 
 class TCNDecoder(nn.Module):
@@ -228,9 +214,14 @@ class TCNDecoder(nn.Module):
                  neural_dim,
                  n_days,
                  n_classes,
-                 input_dropout = 0.4,
+                 input_dropout=0.4,
+                 patch_size=5,
+                 patch_stride=5,
+                 hidden_dim=384,
                  kernel_size=3,
-                 tcn_num_blocks = 6,
+                 tcn_num_blocks=5,
+                 tcn_dropout=0.35,
+                 expansion_factor=2,
                  ):
         """
         Args:
@@ -245,8 +236,13 @@ class TCNDecoder(nn.Module):
         self.n_days = n_days
         self.n_classes = n_classes
         self.input_dropout = input_dropout
+        self.patch_size = patch_size
+        self.patch_stride = patch_stride
+        self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
         self.tcn_num_blocks = tcn_num_blocks
+        self.tcn_dropout = tcn_dropout
+        self.expansion_factor = expansion_factor
 
         # Parameters for the day-specific input layers
         self.day_layer_activation = nn.Softsign()  # basically a shallower tanh
@@ -261,23 +257,30 @@ class TCNDecoder(nn.Module):
 
         self.day_layer_dropout = nn.Dropout(input_dropout)
 
+        patch_dim = self.neural_dim * self.patch_size
+        self.patch_embed = nn.Sequential(
+            nn.LayerNorm(patch_dim),
+            nn.Linear(patch_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim),
+        )
+        nn.init.xavier_uniform_(self.patch_embed[1].weight)
+
         self.residual_blocks = nn.ModuleList()
 
         for k in range(tcn_num_blocks):
-            # Exponentially increasing dilations expand the receptive field
-            # while keeping the per-block parameter count fixed.
-            dilation1 = 2 ** k
-            dilation2 = 2 ** (k + 1)
+            dilation = 2 ** k
             self.residual_blocks.append(
-                TemporalBlock(
-                    channels=neural_dim,
+                CompactTemporalBlock(
+                    channels=self.hidden_dim,
                     kernel_size=kernel_size,
-                    dilation1=dilation1,
-                    dilation2=dilation2,
+                    dilation=dilation,
+                    dropout=tcn_dropout,
+                    expansion_factor=expansion_factor,
                 )
             )
 
-        self.out = nn.Linear(self.neural_dim, self.n_classes)
+        self.out_norm = nn.LayerNorm(self.hidden_dim)
+        self.out = nn.Linear(self.hidden_dim, self.n_classes)
         nn.init.xavier_uniform_(self.out.weight)
 
     def forward(self, x, day_idx, states = None, return_state = False):
@@ -296,6 +299,10 @@ class TCNDecoder(nn.Module):
         if self.input_dropout > 0:
             x = self.day_layer_dropout(x)
 
+        x = x.unfold(1, self.patch_size, self.patch_stride)
+        x = x.permute(0, 1, 3, 2).reshape(x.size(0), x.size(1), -1)
+        x = self.patch_embed(x)
+
         # Conv1d expects [batch, channels, time].
         x = x.permute(0, 2, 1)
 
@@ -304,6 +311,7 @@ class TCNDecoder(nn.Module):
 
         # Convert back to [batch, time, channels] for the classifier head.
         x = x.permute(0, 2, 1)
+        x = self.out_norm(x)
         logits = self.out(x)
 
         if return_state:
@@ -312,4 +320,4 @@ class TCNDecoder(nn.Module):
         return logits
 
     def compute_output_lengths(self, input_lengths):
-        return input_lengths.to(torch.int32)
+        return ((input_lengths - self.patch_size) / self.patch_stride + 1).to(torch.int32)

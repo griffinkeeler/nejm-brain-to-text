@@ -76,8 +76,13 @@ elif model_type == 'tcn':
         n_days = len(model_args['dataset']['sessions']),
         n_classes = model_args['dataset']['n_classes'],
         input_dropout = model_args['model']['input_network']['input_layer_dropout'],
+        patch_size = model_args['model'].get('tcn_patch_size', 5),
+        patch_stride = model_args['model'].get('tcn_patch_stride', 5),
+        hidden_dim = model_args['model'].get('tcn_hidden_dim', 384),
         kernel_size = model_args['model'].get('kernel_size', 3),
-        tcn_num_blocks = model_args['model'].get('tcn_num_blocks', 6),
+        tcn_num_blocks = model_args['model'].get('tcn_num_blocks', 5),
+        tcn_dropout = model_args['model'].get('tcn_dropout', 0.35),
+        expansion_factor = model_args['model'].get('tcn_expansion_factor', 2),
     )
 else:
     raise ValueError(f"Invalid model type: {model_type}")

@@ -8,7 +8,12 @@ model:
   patch_size: 14 # size of the input patches (14 time steps)
   patch_stride: 4 # stride for the input patches (4 time steps)
   kernel_size: 3 # kernel size for the TCN decoder
-  tcn_num_blocks: 6 # number of temporal blocks in the TCN decoder
+  tcn_num_blocks: 5 # number of temporal blocks in the TCN decoder
+  tcn_hidden_dim: 384 # latent width for the TCN decoder after patch embedding
+  tcn_patch_size: 5 # temporal patch size for the TCN decoder
+  tcn_patch_stride: 5 # temporal patch stride for the TCN decoder
+  tcn_dropout: 0.35 # dropout inside the TCN residual blocks
+  tcn_expansion_factor: 2 # channel expansion factor inside each TCN block
 
   input_network:
     n_input_layers: 1 # number of input layers per network (one network for each day)

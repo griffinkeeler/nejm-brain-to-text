@@ -1,8 +1,8 @@
-2026-07-08 11:29:55,971: Using device: cpu
-2026-07-08 11:29:55,971: Disabling AMP because CUDA is not available
-2026-07-08 11:29:56,012: Using eager mode (torch.compile disabled)
-2026-07-08 11:29:56,012: Initialized TCN decoding model
-2026-07-08 11:29:56,012: TCNDecoder(
+2026-07-08 16:49:03,286: Using device: cpu
+2026-07-08 16:49:03,286: Disabling AMP because CUDA is not available
+2026-07-08 16:49:03,309: Using eager mode (torch.compile disabled)
+2026-07-08 16:49:03,309: Initialized TCN decoding model
+2026-07-08 16:49:03,309: TCNDecoder(
   (day_layer_activation): Softsign()
   (day_weights): ParameterList(
       (0): Parameter containing: [torch.float32 of size 512x512]
@@ -99,144 +99,138 @@
       (44): Parameter containing: [torch.float32 of size 1x512]
   )
   (day_layer_dropout): Dropout(p=0.2, inplace=False)
+  (patch_embed): Sequential(
+    (0): LayerNorm((2560,), eps=1e-05, elementwise_affine=True)
+    (1): Linear(in_features=2560, out_features=384, bias=True)
+    (2): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
+  )
   (residual_blocks): ModuleList(
-    (0): TemporalBlock(
-      (res1): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+    (0): CompactTemporalBlock(
+      (norm1): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
-      (res2): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(2,), dilation=(2,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+      (depthwise): CausalConv1d(
+        (conv): Conv1d(384, 384, kernel_size=(3,), stride=(1,), groups=384)
       )
-      (glu): GLUConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 1024, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): GLU(dim=1)
-        )
+      (pointwise_in): Conv1d(384, 768, kernel_size=(1,), stride=(1,))
+      (pointwise_out): Conv1d(768, 384, kernel_size=(1,), stride=(1,))
+      (activation): GELU(approximate='none')
+      (dropout): Dropout(p=0.35, inplace=False)
+      (norm2): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
     )
-    (1): TemporalBlock(
-      (res1): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(2,), dilation=(2,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+    (1): CompactTemporalBlock(
+      (norm1): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
-      (res2): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(4,), dilation=(4,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+      (depthwise): CausalConv1d(
+        (conv): Conv1d(384, 384, kernel_size=(3,), stride=(1,), dilation=(2,), groups=384)
       )
-      (glu): GLUConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 1024, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): GLU(dim=1)
-        )
+      (pointwise_in): Conv1d(384, 768, kernel_size=(1,), stride=(1,))
+      (pointwise_out): Conv1d(768, 384, kernel_size=(1,), stride=(1,))
+      (activation): GELU(approximate='none')
+      (dropout): Dropout(p=0.35, inplace=False)
+      (norm2): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
     )
-    (2): TemporalBlock(
-      (res1): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(4,), dilation=(4,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+    (2): CompactTemporalBlock(
+      (norm1): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
-      (res2): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(8,), dilation=(8,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+      (depthwise): CausalConv1d(
+        (conv): Conv1d(384, 384, kernel_size=(3,), stride=(1,), dilation=(4,), groups=384)
       )
-      (glu): GLUConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 1024, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): GLU(dim=1)
-        )
+      (pointwise_in): Conv1d(384, 768, kernel_size=(1,), stride=(1,))
+      (pointwise_out): Conv1d(768, 384, kernel_size=(1,), stride=(1,))
+      (activation): GELU(approximate='none')
+      (dropout): Dropout(p=0.35, inplace=False)
+      (norm2): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
     )
-    (3): TemporalBlock(
-      (res1): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(8,), dilation=(8,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+    (3): CompactTemporalBlock(
+      (norm1): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
-      (res2): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(16,), dilation=(16,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+      (depthwise): CausalConv1d(
+        (conv): Conv1d(384, 384, kernel_size=(3,), stride=(1,), dilation=(8,), groups=384)
       )
-      (glu): GLUConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 1024, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): GLU(dim=1)
-        )
+      (pointwise_in): Conv1d(384, 768, kernel_size=(1,), stride=(1,))
+      (pointwise_out): Conv1d(768, 384, kernel_size=(1,), stride=(1,))
+      (activation): GELU(approximate='none')
+      (dropout): Dropout(p=0.35, inplace=False)
+      (norm2): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
     )
-    (4): TemporalBlock(
-      (res1): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(16,), dilation=(16,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+    (4): CompactTemporalBlock(
+      (norm1): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
-      (res2): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(32,), dilation=(32,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
+      (depthwise): CausalConv1d(
+        (conv): Conv1d(384, 384, kernel_size=(3,), stride=(1,), dilation=(16,), groups=384)
       )
-      (glu): GLUConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 1024, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): GLU(dim=1)
-        )
-      )
-    )
-    (5): TemporalBlock(
-      (res1): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(32,), dilation=(32,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
-      )
-      (res2): ResidualConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 512, kernel_size=(3,), stride=(1,), padding=(64,), dilation=(64,))
-          (1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-          (2): GELU(approximate='none')
-        )
-      )
-      (glu): GLUConv1d(
-        (net): Sequential(
-          (0): Conv1d(512, 1024, kernel_size=(3,), stride=(1,), padding=(1,))
-          (1): GLU(dim=1)
-        )
+      (pointwise_in): Conv1d(384, 768, kernel_size=(1,), stride=(1,))
+      (pointwise_out): Conv1d(768, 384, kernel_size=(1,), stride=(1,))
+      (activation): GELU(approximate='none')
+      (dropout): Dropout(p=0.35, inplace=False)
+      (norm2): ChannelLayerNorm(
+        (norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
       )
     )
   )
-  (out): Linear(in_features=512, out_features=41, bias=True)
+  (out_norm): LayerNorm((384,), eps=1e-05, elementwise_affine=True)
+  (out): Linear(in_features=384, out_features=41, bias=True)
 )
-2026-07-08 11:29:56,013: Model has 30,739,497 parameters
-2026-07-08 11:29:56,013: Model has 11,819,520 day-specific parameters | 38.45% of total parameters
-2026-07-08 11:30:01,377: Successfully initialized datasets
-2026-07-08 11:31:01,302: Train batch 0: loss: 3096.08 grad norm: 9173.02 time: 49.726
-2026-07-08 11:31:01,305: Running test after training batch: 0
+2026-07-08 16:49:03,309: Model has 15,795,625 parameters
+2026-07-08 16:49:03,309: Model has 11,819,520 day-specific parameters | 74.83% of total parameters
+2026-07-08 16:49:08,480: Successfully initialized datasets
+2026-07-08 16:49:38,121: Train batch 0: loss: 608.71 grad norm: 572.97 time: 19.143
+2026-07-08 16:49:38,122: Running test after training batch: 0
+2026-07-08 16:55:53,421: Val batch 0: PER (avg): 4.4624 CTC Loss (avg): 542.8077 time: 375.300
+2026-07-08 16:55:53,422: t15.2023.08.13 val PER: 3.7495
+2026-07-08 16:55:53,422: t15.2023.08.18 val PER: 4.1844
+2026-07-08 16:55:53,422: t15.2023.08.20 val PER: 3.9182
+2026-07-08 16:55:53,422: t15.2023.08.25 val PER: 4.0120
+2026-07-08 16:55:53,422: t15.2023.08.27 val PER: 3.6881
+2026-07-08 16:55:53,422: t15.2023.09.01 val PER: 4.1339
+2026-07-08 16:55:53,422: t15.2023.09.03 val PER: 4.1188
+2026-07-08 16:55:53,422: t15.2023.09.24 val PER: 4.6917
+2026-07-08 16:55:53,422: t15.2023.09.29 val PER: 4.5967
+2026-07-08 16:55:53,422: t15.2023.10.01 val PER: 3.6063
+2026-07-08 16:55:53,422: t15.2023.10.06 val PER: 4.6297
+2026-07-08 16:55:53,422: t15.2023.10.08 val PER: 3.3396
+2026-07-08 16:55:53,422: t15.2023.10.13 val PER: 4.2483
+2026-07-08 16:55:53,422: t15.2023.10.15 val PER: 4.4225
+2026-07-08 16:55:53,422: t15.2023.10.20 val PER: 4.6208
+2026-07-08 16:55:53,422: t15.2023.10.22 val PER: 4.5089
+2026-07-08 16:55:53,422: t15.2023.11.03 val PER: 5.0739
+2026-07-08 16:55:53,422: t15.2023.11.04 val PER: 6.0614
+2026-07-08 16:55:53,422: t15.2023.11.17 val PER: 6.3810
+2026-07-08 16:55:53,422: t15.2023.11.19 val PER: 5.2136
+2026-07-08 16:55:53,422: t15.2023.11.26 val PER: 4.9181
+2026-07-08 16:55:53,423: t15.2023.12.03 val PER: 4.3099
+2026-07-08 16:55:53,423: t15.2023.12.08 val PER: 4.7929
+2026-07-08 16:55:53,423: t15.2023.12.10 val PER: 5.3101
+2026-07-08 16:55:53,423: t15.2023.12.17 val PER: 4.1507
+2026-07-08 16:55:53,423: t15.2023.12.29 val PER: 4.2835
+2026-07-08 16:55:53,423: t15.2024.02.25 val PER: 4.5154
+2026-07-08 16:55:53,423: t15.2024.03.08 val PER: 4.3442
+2026-07-08 16:55:53,423: t15.2024.03.15 val PER: 4.2189
+2026-07-08 16:55:53,423: t15.2024.03.17 val PER: 4.2985
+2026-07-08 16:55:53,423: t15.2024.05.10 val PER: 4.2333
+2026-07-08 16:55:53,423: t15.2024.06.14 val PER: 5.0237
+2026-07-08 16:55:53,423: t15.2024.07.19 val PER: 3.2320
+2026-07-08 16:55:53,423: t15.2024.07.21 val PER: 5.0545
+2026-07-08 16:55:53,423: t15.2024.07.28 val PER: 5.2412
+2026-07-08 16:55:53,423: t15.2025.01.10 val PER: 3.3375
+2026-07-08 16:55:53,423: t15.2025.01.12 val PER: 5.7614
+2026-07-08 16:55:53,423: t15.2025.03.14 val PER: 3.4704
+2026-07-08 16:55:53,423: t15.2025.03.16 val PER: 5.6819
+2026-07-08 16:55:53,423: t15.2025.03.30 val PER: 4.4839
+2026-07-08 16:55:53,423: t15.2025.04.13 val PER: 4.7732
+2026-07-08 16:55:53,423: New best test PER inf --> 4.4624
+2026-07-08 16:55:53,423: Checkpointing model
+2026-07-08 16:55:53,560: Saved model to checkpoint: trained_models/baseline_rnn/checkpoint/best_checkpoint
