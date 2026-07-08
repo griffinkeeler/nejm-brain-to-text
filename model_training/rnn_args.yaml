@@ -1,4 +1,5 @@
 model:
+  model_type: tcn # decoder architecture to use: "gru" or "tcn"
   n_input_features: 512 # number of input features in the neural data. (2 features per electrode, 256 electrodes)
   n_units: 768 # number of units per GRU layer
   rnn_dropout: 0.4 # dropout rate for the GRU layers
@@ -6,6 +7,8 @@ model:
   n_layers: 5 # number of GRU layers
   patch_size: 14 # size of the input patches (14 time steps)
   patch_stride: 4 # stride for the input patches (4 time steps)
+  kernel_size: 3 # kernel size for the TCN decoder
+  tcn_num_blocks: 6 # number of temporal blocks in the TCN decoder
 
   input_network:
     n_input_layers: 1 # number of input layers per network (one network for each day)

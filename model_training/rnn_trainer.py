@@ -23,7 +23,7 @@ torch.set_float32_matmul_precision('high') # makes float32 matmuls faster on som
 torch.backends.cudnn.deterministic = True # makes training more reproducible
 torch._dynamo.config.cache_size_limit = 64
 
-from rnn_model import GRUDecoder
+from rnn_model import GRUDecoder, TCNDecoder
 
 class BrainToTextDecoder_Trainer:
     """
@@ -130,18 +130,32 @@ class BrainToTextDecoder_Trainer:
             random.seed(self.args['seed'])
             torch.manual_seed(self.args['seed'])
 
-        # Initialize the model 
-        self.model = GRUDecoder(
-            neural_dim = self.args['model']['n_input_features'],
-            n_units = self.args['model']['n_units'],
-            n_days = len(self.args['dataset']['sessions']),
-            n_classes  = self.args['dataset']['n_classes'],
-            rnn_dropout = self.args['model']['rnn_dropout'], 
-            input_dropout = self.args['model']['input_network']['input_layer_dropout'], 
-            n_layers = self.args['model']['n_layers'],
-            patch_size = self.args['model']['patch_size'],
-            patch_stride = self.args['model']['patch_stride'],
-        )
+        model_type = str(self.args['model'].get('model_type', 'gru')).lower()
+
+        # Initialize the model
+        if model_type == 'gru':
+            self.model = GRUDecoder(
+                neural_dim = self.args['model']['n_input_features'],
+                n_units = self.args['model']['n_units'],
+                n_days = len(self.args['dataset']['sessions']),
+                n_classes  = self.args['dataset']['n_classes'],
+                rnn_dropout = self.args['model']['rnn_dropout'],
+                input_dropout = self.args['model']['input_network']['input_layer_dropout'],
+                n_layers = self.args['model']['n_layers'],
+                patch_size = self.args['model']['patch_size'],
+                patch_stride = self.args['model']['patch_stride'],
+            )
+        elif model_type == 'tcn':
+            self.model = TCNDecoder(
+                neural_dim = self.args['model']['n_input_features'],
+                n_days = len(self.args['dataset']['sessions']),
+                n_classes = self.args['dataset']['n_classes'],
+                input_dropout = self.args['model']['input_network']['input_layer_dropout'],
+                kernel_size = self.args['model'].get('kernel_size', 3),
+                tcn_num_blocks = self.args['model'].get('tcn_num_blocks', 6),
+            )
+        else:
+            raise ValueError(f"Invalid model type: {model_type}")
 
         if self.enable_torch_compile:
             try:
@@ -153,7 +167,7 @@ class BrainToTextDecoder_Trainer:
         else:
             self.logger.info("Using eager mode (torch.compile disabled)")
 
-        self.logger.info(f"Initialized RNN decoding model")
+        self.logger.info(f"Initialized {model_type.upper()} decoding model")
 
         self.logger.info(self.model)
 
@@ -267,7 +281,7 @@ class BrainToTextDecoder_Trainer:
 
         # Set rnn and/or input layers to not trainable if specified 
         for name, param in self.model.named_parameters():
-            if not self.args['model']['rnn_trainable'] and 'gru' in name:
+            if not self.args['model']['rnn_trainable'] and ('gru' in name or 'residual_blocks' in name):
                 param.requires_grad = False
 
             elif not self.args['model']['input_network']['input_trainable'] and 'day' in name:
@@ -284,9 +298,9 @@ class BrainToTextDecoder_Trainer:
 
         Day weights should have a separate learning rate
         '''
-        bias_params = [p for name, p in self.model.named_parameters() if 'gru.bias' in name or 'out.bias' in name]
+        bias_params = [p for name, p in self.model.named_parameters() if name.endswith('bias') and 'day_' not in name]
         day_params = [p for name, p in self.model.named_parameters() if 'day_' in name]
-        other_params = [p for name, p in self.model.named_parameters() if 'day_' not in name and 'gru.bias' not in name and 'out.bias' not in name]
+        other_params = [p for name, p in self.model.named_parameters() if 'day_' not in name and not name.endswith('bias')]
 
         if len(day_params) != 0:
             param_groups = [
@@ -554,7 +568,7 @@ class BrainToTextDecoder_Trainer:
                 # Apply augmentations to the data
                 features, n_time_steps = self.transform_data(features, n_time_steps, 'train')
 
-                adjusted_lens = ((n_time_steps - self.args['model']['patch_size']) / self.args['model']['patch_stride'] + 1).to(torch.int32)
+                adjusted_lens = self.model.compute_output_lengths(n_time_steps)
 
                 # Get phoneme predictions 
                 logits = self.model(features, day_indicies)
@@ -729,7 +743,7 @@ class BrainToTextDecoder_Trainer:
                 with self._autocast_context():
                     features, n_time_steps = self.transform_data(features, n_time_steps, 'val')
 
-                    adjusted_lens = ((n_time_steps - self.args['model']['patch_size']) / self.args['model']['patch_stride'] + 1).to(torch.int32)
+                    adjusted_lens = self.model.compute_output_lengths(n_time_steps)
 
                     logits = self.model(features, day_indicies)
     

@@ -9,7 +9,7 @@ from tqdm import tqdm
 import editdistance
 import argparse
 
-from rnn_model import GRUDecoder
+from rnn_model import GRUDecoder, TCNDecoder
 from evaluate_model_helpers import *
 
 # argument parser for command line arguments
@@ -55,18 +55,32 @@ else:
     print('Using CPU for model inference.')
     device = torch.device('cpu')
 
+model_type = str(model_args['model'].get('model_type', 'gru')).lower()
+
 # define model
-model = GRUDecoder(
-    neural_dim = model_args['model']['n_input_features'],
-    n_units = model_args['model']['n_units'], 
-    n_days = len(model_args['dataset']['sessions']),
-    n_classes = model_args['dataset']['n_classes'],
-    rnn_dropout = model_args['model']['rnn_dropout'],
-    input_dropout = model_args['model']['input_network']['input_layer_dropout'],
-    n_layers = model_args['model']['n_layers'],
-    patch_size = model_args['model']['patch_size'],
-    patch_stride = model_args['model']['patch_stride'],
-)
+if model_type == 'gru':
+    model = GRUDecoder(
+        neural_dim = model_args['model']['n_input_features'],
+        n_units = model_args['model']['n_units'],
+        n_days = len(model_args['dataset']['sessions']),
+        n_classes = model_args['dataset']['n_classes'],
+        rnn_dropout = model_args['model']['rnn_dropout'],
+        input_dropout = model_args['model']['input_network']['input_layer_dropout'],
+        n_layers = model_args['model']['n_layers'],
+        patch_size = model_args['model']['patch_size'],
+        patch_stride = model_args['model']['patch_stride'],
+    )
+elif model_type == 'tcn':
+    model = TCNDecoder(
+        neural_dim = model_args['model']['n_input_features'],
+        n_days = len(model_args['dataset']['sessions']),
+        n_classes = model_args['dataset']['n_classes'],
+        input_dropout = model_args['model']['input_network']['input_layer_dropout'],
+        kernel_size = model_args['model'].get('kernel_size', 3),
+        tcn_num_blocks = model_args['model'].get('tcn_num_blocks', 6),
+    )
+else:
+    raise ValueError(f"Invalid model type: {model_type}")
 
 # load model weights
 checkpoint = torch.load(os.path.join(model_path, 'checkpoint/best_checkpoint'), weights_only=False)

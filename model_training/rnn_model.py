@@ -132,5 +132,184 @@ class GRUDecoder(nn.Module):
             return logits, hidden_states
         
         return logits
-        
 
+    def compute_output_lengths(self, input_lengths):
+        if self.patch_size > 0:
+            return ((input_lengths - self.patch_size) / self.patch_stride + 1).to(torch.int32)
+        return input_lengths.to(torch.int32)
+
+
+class ResidualConv1d(nn.Module):
+    """Residual dilated convolution for tracking short and long range
+    temporal patterns."""
+    def __init__(self, channels, kernel_size=3, dilation=1):
+        super().__init__()
+
+        padding = (kernel_size // 2) * dilation
+
+        self.net = nn.Sequential(
+            nn.Conv1d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=kernel_size,
+                padding=padding,
+                dilation=dilation,
+            ),
+            nn.BatchNorm1d(channels),
+            nn.GELU(),
+        )
+
+    def forward(self, x):
+        # Keeps the original signal (residual connection)
+        # While also adding new learned correction
+        return x + self.net(x)
+
+
+class GLUConv1d(nn.Module):
+    """Gated linear unit layer that determines how strongly the learned
+    features should pass through."""
+    def __init__(self, channels, kernel_size=3):
+        super().__init__()
+
+        padding = kernel_size // 2
+
+        self.net = nn.Sequential(
+            nn.Conv1d(
+                in_channels=channels,
+                out_channels=2 * channels,
+                kernel_size=kernel_size,
+                padding=padding,
+            ),
+            nn.GLU(dim=1),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class TemporalBlock(nn.Module):
+    """Residual dilation convolution block with increasing dilation.
+    GLU is implemented at the end to determine how much of each feature
+    should be passed forward."""
+    def __init__(self, channels=512, kernel_size=3, dilation1=1, dilation2=2):
+        super().__init__()
+
+        self.res1 = ResidualConv1d(
+            channels=channels,
+            kernel_size=kernel_size,
+            dilation=dilation1,
+        )
+
+        self.res2 = ResidualConv1d(
+            channels=channels,
+            kernel_size=kernel_size,
+            dilation=dilation2,
+        )
+
+        self.glu = GLUConv1d(
+            channels=channels,
+            kernel_size=kernel_size,
+        )
+
+    def forward(self, x):
+        x = self.res1(x)
+        x = self.res2(x)
+        x = self.glu(x)
+        return x
+
+
+class TCNDecoder(nn.Module):
+    """
+    Defines the TCN decoder.
+
+    This class combines day-specific input layers, a TCN, and an output classification layer.
+    """
+    def __init__(self,
+                 neural_dim,
+                 n_days,
+                 n_classes,
+                 input_dropout = 0.4,
+                 kernel_size=3,
+                 tcn_num_blocks = 6,
+                 ):
+        """
+        Args:
+            neural_dim  (int)      - number of channels in a single timestep (e.g. 512)
+            n_days      (int)      - number of days in the dataset
+            n_classes   (int)      - number of output classes
+            input_dropout (float)  - percentage of input units to dropout during training
+        """
+        super().__init__()
+
+        self.neural_dim = neural_dim
+        self.n_days = n_days
+        self.n_classes = n_classes
+        self.input_dropout = input_dropout
+        self.kernel_size = kernel_size
+        self.tcn_num_blocks = tcn_num_blocks
+
+        # Parameters for the day-specific input layers
+        self.day_layer_activation = nn.Softsign()  # basically a shallower tanh
+
+        # Set weights for day layers to be identity matrices so the model can learn its own day-specific transformations
+        self.day_weights = nn.ParameterList(
+            [nn.Parameter(torch.eye(self.neural_dim)) for _ in range(self.n_days)]
+        )
+        self.day_biases = nn.ParameterList(
+            [nn.Parameter(torch.zeros(1, self.neural_dim)) for _ in range(self.n_days)]
+        )
+
+        self.day_layer_dropout = nn.Dropout(input_dropout)
+
+        self.residual_blocks = nn.ModuleList()
+
+        for k in range(tcn_num_blocks):
+            # Exponentially increasing dilations expand the receptive field
+            # while keeping the per-block parameter count fixed.
+            dilation1 = 2 ** k
+            dilation2 = 2 ** (k + 1)
+            self.residual_blocks.append(
+                TemporalBlock(
+                    channels=neural_dim,
+                    kernel_size=kernel_size,
+                    dilation1=dilation1,
+                    dilation2=dilation2,
+                )
+            )
+
+        self.out = nn.Linear(self.neural_dim, self.n_classes)
+        nn.init.xavier_uniform_(self.out.weight)
+
+    def forward(self, x, day_idx, states = None, return_state = False):
+        """
+        x        (tensor)  - batch of examples (trials) of shape: (batch_size, time_series_length, neural_dim)
+        day_idx  (tensor)  - tensor which is a list of day indexs corresponding to the day of each example in the batch x.
+        """
+
+        # Apply day-specific layer to (hopefully) project neural data from the different days to the same latent space
+        day_weights = torch.stack([self.day_weights[i] for i in day_idx], dim=0)
+        day_biases = torch.cat([self.day_biases[i] for i in day_idx], dim=0).unsqueeze(1)
+
+        x = torch.einsum("btd,bdk->btk", x, day_weights) + day_biases
+        x = self.day_layer_activation(x)
+
+        if self.input_dropout > 0:
+            x = self.day_layer_dropout(x)
+
+        # Conv1d expects [batch, channels, time].
+        x = x.permute(0, 2, 1)
+
+        for block in self.residual_blocks:
+            x = block(x)
+
+        # Convert back to [batch, time, channels] for the classifier head.
+        x = x.permute(0, 2, 1)
+        logits = self.out(x)
+
+        if return_state:
+            return logits, None
+
+        return logits
+
+    def compute_output_lengths(self, input_lengths):
+        return input_lengths.to(torch.int32)
