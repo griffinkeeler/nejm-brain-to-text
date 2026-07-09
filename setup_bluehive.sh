@@ -5,23 +5,58 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  REPO_ROOT="$SLURM_SUBMIT_DIR"
+else
+  REPO_ROOT="$(pwd)"
+fi
+
+if [[ ! -f "$REPO_ROOT/setup_bluehive.sh" ]]; then
+  echo "Error: Could not locate the repository root."
+  echo "Expected to find setup_bluehive.sh under: $REPO_ROOT"
+  echo "Run this script from the repository directory, or submit with:"
+  echo "  sbatch --chdir=/path/to/repo setup_bluehive.sh"
+  exit 1
+fi
+
+mkdir -p "$REPO_ROOT/logs"
+
 DEFAULT_VENV_DIR="/scratch/mcetin_lab/gkeeler/venvs/b2txt25"
 VENV_DIR="${1:-$DEFAULT_VENV_DIR}"
-PYTHON_BIN="${PYTHON_BIN:-python3.10}"
+
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PYTHON_CANDIDATES=("$PYTHON_BIN")
+else
+  PYTHON_CANDIDATES=(python3.10 python3 python)
+fi
 
 echo "Repo root: $REPO_ROOT"
 echo "Virtual environment: $VENV_DIR"
 
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Error: $PYTHON_BIN is not available in PATH."
-  echo "Set PYTHON_BIN to a Python 3.10+ executable before running this script."
+PYTHON_BIN=""
+for candidate in "${PYTHON_CANDIDATES[@]}"; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    PYTHON_BIN="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "Error: Could not find a usable Python executable in PATH."
+  echo "Tried: ${PYTHON_CANDIDATES[*]}"
+  echo "Load a Python module first, for example:"
+  echo "  module avail python"
+  echo "  module load python/3.10"
+  echo "Then rerun, or set PYTHON_BIN explicitly."
   exit 1
 fi
+
+echo "Python executable: $(command -v "$PYTHON_BIN")"
 
 PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 if [[ "$(printf '%s\n' "3.10" "$PYTHON_VERSION" | sort -V | head -n1)" != "3.10" ]]; then
   echo "Error: $PYTHON_BIN is Python $PYTHON_VERSION, but this project requires Python 3.10+."
+  echo "Load a newer Python module or set PYTHON_BIN to a Python 3.10+ executable."
   exit 1
 fi
 
