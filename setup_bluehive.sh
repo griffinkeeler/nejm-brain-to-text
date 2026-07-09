@@ -5,11 +5,7 @@
 
 set -euo pipefail
 
-if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
-  REPO_ROOT="$SLURM_SUBMIT_DIR"
-else
-  REPO_ROOT="$(pwd)"
-fi
+REPO_ROOT="/scratch/mcetin_lab/gkeeler/brain-to-text"
 
 if [[ ! -f "$REPO_ROOT/setup_bluehive.sh" ]]; then
   echo "Error: Could not locate the repository root."
