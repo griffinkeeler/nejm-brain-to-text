@@ -2,6 +2,22 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+def temporal_patches(x, patch_size, patch_stride):
+    """Flatten time-by-feature patches, including on older MPS backends."""
+    if x.device.type == 'mps':
+        # PyTorch 2.5 MPS has no unfold backward. index_select preserves the
+        # same ordering and accumulates gradients for overlapping patches.
+        starts = torch.arange(0, x.shape[1] - patch_size + 1,
+                              patch_stride, device=x.device)
+        offsets = torch.arange(patch_size, device=x.device)
+        indices = (starts[:, None] + offsets[None, :]).reshape(-1)
+        return x.index_select(1, indices).reshape(
+            x.shape[0], starts.numel(), patch_size * x.shape[2])
+    patches = x.unfold(1, patch_size, patch_stride)
+    return patches.permute(0, 1, 3, 2).reshape(
+        x.shape[0], patches.shape[1], patch_size * x.shape[2])
+
+
 class GRUDecoder(nn.Module):
     '''
     Defines the GRU decoder
@@ -106,19 +122,8 @@ class GRUDecoder(nn.Module):
         # (Optionally) Perform input concat operation
         if self.patch_size > 0: 
   
-            x = x.unsqueeze(1)                      # [batches, 1, timesteps, feature_dim]
-            x = x.permute(0, 3, 1, 2)               # [batches, feature_dim, 1, timesteps]
-            
-            # Extract patches using unfold (sliding window)
-            x_unfold = x.unfold(3, self.patch_size, self.patch_stride)  # [batches, feature_dim, 1, num_patches, patch_size]
-            
-            # Remove dummy height dimension and rearrange dimensions
-            x_unfold = x_unfold.squeeze(2)           # [batches, feature_dum, num_patches, patch_size]
-            x_unfold = x_unfold.permute(0, 2, 3, 1)  # [batches, num_patches, patch_size, feature_dim]
+            x = temporal_patches(x, self.patch_size, self.patch_stride)
 
-            # Flatten last two dimensions (patch_size and features)
-            x = x_unfold.reshape(x.size(0), x_unfold.size(1), -1) 
-        
         # Determine initial hidden states
         if states is None:
             states = self.h0.expand(self.n_layers, x.shape[0], self.n_units).contiguous()
@@ -150,12 +155,21 @@ class ChannelLayerNorm(nn.Module):
         return self.norm(x.transpose(1, 2)).transpose(1, 2)
 
 
+class PortableConv1d(nn.Conv1d):
+    """Older MPS convolution backward requires contiguous output gradients."""
+    def forward(self, x):
+        output = super().forward(x)
+        if output.device.type == 'mps' and output.requires_grad:
+            output.register_hook(lambda grad: grad.contiguous())
+        return output
+
+
 class CausalConv1d(nn.Module):
     """1D convolution with left padding so each timestep only sees the past."""
     def __init__(self, in_channels, out_channels, kernel_size=3, dilation=1, groups=1):
         super().__init__()
         self.left_padding = (kernel_size - 1) * dilation
-        self.conv = nn.Conv1d(
+        self.conv = PortableConv1d(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -183,8 +197,8 @@ class CompactTemporalBlock(nn.Module):
             dilation=dilation,
             groups=channels,
         )
-        self.pointwise_in = nn.Conv1d(channels, expanded_channels, kernel_size=1)
-        self.pointwise_out = nn.Conv1d(expanded_channels, channels, kernel_size=1)
+        self.pointwise_in = PortableConv1d(channels, expanded_channels, kernel_size=1)
+        self.pointwise_out = PortableConv1d(expanded_channels, channels, kernel_size=1)
         self.activation = nn.GELU()
         self.dropout = nn.Dropout(dropout)
         self.norm2 = ChannelLayerNorm(channels)
@@ -299,8 +313,7 @@ class TCNDecoder(nn.Module):
         if self.input_dropout > 0:
             x = self.day_layer_dropout(x)
 
-        x = x.unfold(1, self.patch_size, self.patch_stride)
-        x = x.permute(0, 1, 3, 2).reshape(x.size(0), x.size(1), -1)
+        x = temporal_patches(x, self.patch_size, self.patch_stride)
         x = self.patch_embed(x)
 
         # Conv1d expects [batch, channels, time].

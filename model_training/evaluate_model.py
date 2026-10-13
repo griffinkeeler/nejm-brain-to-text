@@ -10,6 +10,7 @@ import editdistance
 import argparse
 
 from rnn_model import GRUDecoder, TCNDecoder
+from device_utils import select_device
 from evaluate_model_helpers import *
 
 # argument parser for command line arguments
@@ -25,6 +26,8 @@ parser.add_argument('--csv_path', type=str, default='../data/t15_copyTaskData_de
                     help='Path to the CSV file with metadata about the dataset (relative to the current working directory).')
 parser.add_argument('--gpu_number', type=int, default=1,
                     help='GPU number to use for RNN model inference. Set to -1 to use CPU.')
+parser.add_argument('--device', choices=['auto', 'cpu', 'cuda', 'mps'], default='auto',
+                    help='Inference device; auto prefers CUDA, then Apple MPS, then CPU.')
 args = parser.parse_args()
 
 # paths to model and data directories
@@ -41,19 +44,8 @@ b2txt_csv_df = pd.read_csv(args.csv_path)
 # load model args
 model_args = OmegaConf.load(os.path.join(model_path, 'checkpoint/args.yaml'))
 
-# set up gpu device
-gpu_number = args.gpu_number
-if torch.cuda.is_available() and gpu_number >= 0:
-    if gpu_number >= torch.cuda.device_count():
-        raise ValueError(f'GPU number {gpu_number} is out of range. Available GPUs: {torch.cuda.device_count()}')
-    device = f'cuda:{gpu_number}'
-    device = torch.device(device)
-    print(f'Using {device} for model inference.')
-else:
-    if gpu_number >= 0:
-        print(f'GPU number {gpu_number} requested but not available.')
-    print('Using CPU for model inference.')
-    device = torch.device('cpu')
+device = select_device(args.device, args.gpu_number)
+print(f'Using {device} for model inference.')
 
 model_type = str(model_args['model'].get('model_type', 'gru')).lower()
 
@@ -88,11 +80,12 @@ else:
     raise ValueError(f"Invalid model type: {model_type}")
 
 # load model weights
-checkpoint = torch.load(os.path.join(model_path, 'checkpoint/best_checkpoint'), weights_only=False)
+checkpoint = torch.load(os.path.join(model_path, 'checkpoint/best_checkpoint'), weights_only=False, map_location='cpu')
 # rename keys to not start with "module." (happens if model was saved with DataParallel)
-for key in list(checkpoint['model_state_dict'].keys()):
-    checkpoint['model_state_dict'][key.replace("module.", "")] = checkpoint['model_state_dict'].pop(key)
-    checkpoint['model_state_dict'][key.replace("_orig_mod.", "")] = checkpoint['model_state_dict'].pop(key)
+checkpoint['model_state_dict'] = {
+    key.removeprefix('module.').removeprefix('_orig_mod.'): value
+    for key, value in checkpoint['model_state_dict'].items()
+}
 model.load_state_dict(checkpoint['model_state_dict'])  
 
 # add model to device

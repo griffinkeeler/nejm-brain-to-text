@@ -24,6 +24,7 @@ torch.backends.cudnn.deterministic = True # makes training more reproducible
 torch._dynamo.config.cache_size_limit = 64
 
 from rnn_model import GRUDecoder, TCNDecoder
+from device_utils import select_device, decoder_ctc_loss, synchronize_device
 
 class BrainToTextDecoder_Trainer:
     """
@@ -84,30 +85,12 @@ class BrainToTextDecoder_Trainer:
         sh.setFormatter(formatter)
         self.logger.addHandler(sh)
 
-        # Configure device pytorch will use 
-        if torch.cuda.is_available():
-            gpu_num = self.args.get('gpu_number', 0)
-            try:
-                gpu_num = int(gpu_num)
-            except ValueError:
-                self.logger.warning(f"Invalid gpu_number value: {gpu_num}. Using 0 instead.")
-                gpu_num = 0
-
-            max_gpu_index = torch.cuda.device_count() - 1
-            if gpu_num > max_gpu_index:
-                self.logger.warning(f"Requested GPU {gpu_num} not available. Using GPU 0 instead.")
-                gpu_num = 0
-
-            try:
-                self.device = torch.device(f"cuda:{gpu_num}")
-                test_tensor = torch.tensor([1.0]).to(self.device)
-                test_tensor = test_tensor * 2
-            except Exception as e:
-                self.logger.error(f"Error initializing CUDA device {gpu_num}: {str(e)}")
-                self.logger.info("Falling back to CPU")
-                self.device = torch.device("cpu")
-        else:
-            self.device = torch.device("cpu")
+        # Prefer CUDA, then Apple GPU, then CPU unless explicitly selected.
+        self.device = select_device(self.args.get('device', 'auto'),
+                                    self.args.get('gpu_number', 0))
+        if self.device.type == 'mps':
+            self.logger.info('Apple GPU enabled; CTC loss runs on CPU with gradients '
+                             'returned to MPS. Timings include these transfers.')
 
         self.logger.info(f'Using device: {self.device}')
 
@@ -410,7 +393,7 @@ class BrainToTextDecoder_Trainer:
         ''' 
         Load a training checkpoint
         '''
-        checkpoint = torch.load(load_path, weights_only = False) # checkpoint is just a dict
+        checkpoint = torch.load(load_path, weights_only=False, map_location='cpu') # checkpoint is just a dict
 
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -491,7 +474,7 @@ class BrainToTextDecoder_Trainer:
         if mode == 'train':
             # add static gain noise 
             if self.transform_args['static_gain_std'] > 0:
-                warp_mat = torch.tile(torch.unsqueeze(torch.eye(channels), dim = 0), (batch_size, 1, 1))
+                warp_mat = torch.tile(torch.unsqueeze(torch.eye(channels, device=self.device), dim = 0), (batch_size, 1, 1))
                 warp_mat += torch.randn_like(warp_mat, device=self.device) * self.transform_args['static_gain_std']
 
                 features = torch.matmul(features, warp_mat)
@@ -549,6 +532,7 @@ class BrainToTextDecoder_Trainer:
 
         early_stopping_val_steps = self.args['early_stopping_val_steps']
 
+        synchronize_device(self.device)
         train_start_time = time.time()
 
         # train for specified number of batches
@@ -579,13 +563,9 @@ class BrainToTextDecoder_Trainer:
                 logits = self.model(features, day_indicies)
 
                 # Calculate CTC Loss
-                loss = self.ctc_loss(
-                    log_probs = torch.permute(logits.log_softmax(2), [1, 0, 2]),
-                    targets = labels,
-                    input_lengths = adjusted_lens,
-                    target_lengths = phone_seq_lens
-                    )
-                    
+                loss = decoder_ctc_loss(
+                    self.ctc_loss, logits, labels, adjusted_lens, phone_seq_lens)
+
                 loss = torch.mean(loss) # take mean loss over batches
             
             loss.backward()
@@ -595,13 +575,14 @@ class BrainToTextDecoder_Trainer:
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 
                                                max_norm = self.args['grad_norm_clip_value'],
                                                error_if_nonfinite = True,
-                                               foreach = True
+                                               foreach = self.device.type == 'cuda'
                                                )
 
             self.optimizer.step()
             self.learning_rate_scheduler.step()
             
             # Save training metrics 
+            synchronize_device(self.device)
             train_step_duration = time.time() - start_time
             train_losses.append(loss.detach().item())
 
@@ -619,7 +600,9 @@ class BrainToTextDecoder_Trainer:
                 # Calculate metrics on val data
                 start_time = time.time()
                 val_metrics = self.validation(loader = self.val_loader, return_logits = self.args['save_val_logits'], return_data = self.args['save_val_data'])
+                synchronize_device(self.device)
                 val_step_duration = time.time() - start_time
+                self.logger.info(f'Elapsed training time including validation: {time.time() - train_start_time:.3f} seconds')
 
 
                 # Log info 
@@ -752,12 +735,8 @@ class BrainToTextDecoder_Trainer:
 
                     logits = self.model(features, day_indicies)
     
-                    loss = self.ctc_loss(
-                        torch.permute(logits.log_softmax(2), [1, 0, 2]),
-                        labels,
-                        adjusted_lens,
-                        phone_seq_lens,
-                    )
+                    loss = decoder_ctc_loss(
+                        self.ctc_loss, logits, labels, adjusted_lens, phone_seq_lens)
                     loss = torch.mean(loss)
 
                 metrics['losses'].append(loss.cpu().detach().numpy())

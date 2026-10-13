@@ -48,3 +48,34 @@ If the script runs successfully, it will save the predicted sentences to a text 
 
 ### Shutdown redis
 When you're done, you can shutdown the redis server from any terminal using `redis-cli shutdown`.
+
+## Apple GPU training (MPS)
+
+On an Apple Silicon Mac, `device: auto` selects CUDA if available, otherwise
+Apple MPS if available, otherwise CPU. Set `device: mps` or pass `--device mps`
+to require the Apple GPU and fail clearly if it is unavailable. `gpu_number`
+selects a CUDA GPU only; with automatic selection, `-1` forces CPU.
+
+From this directory, run each model separately with a fresh output directory:
+
+```bash
+conda activate b2txt25
+python train_model.py --device mps --model_type tcn --output_dir trained_models/tcn_mps_run1
+python train_model.py --device mps --model_type gru --output_dir trained_models/gru_mps_run1
+```
+
+The decoder runs on MPS in float32. AMP and `torch.compile` remain CUDA-only.
+CTC loss is explicitly computed on CPU because the installed PyTorch 2.5
+backend lacks MPS CTC support; gradients flow back to the GPU model. This
+transfer and CPU computation are included in training timings. No global
+`PYTORCH_ENABLE_MPS_FALLBACK` setting is required for this path.
+
+Training-step timings synchronize the GPU, and each validation logs elapsed
+training time including validation. Compare time to the same validation PER
+on the same device, using the same data and multiple seeds. These are hybrid
+MPS/CPU results, not measurements of pure GPU convolution or recurrence speed.
+The default 120,000 batches is a full run, not a smoke test.
+
+For neural-model inference, `evaluate_model.py --device mps` selects Apple GPU
+execution. Its external Redis/language-model service still requires its own
+setup; this option does not port that service to MPS.
