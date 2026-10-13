@@ -23,6 +23,24 @@ def select_device(requested='auto', gpu_number=0):
 
 
 def decoder_ctc_loss(criterion, logits, targets, input_lengths, target_lengths):
+    # CTC needs a blank between adjacent repeated labels as well as one
+    # output position per target label. Reject impossible alignments before
+    # infinite loss can contaminate gradients; never silently drop trials.
+    positions = torch.arange(targets.shape[1] - 1, device=targets.device)
+    repeated = ((targets[:, 1:] == targets[:, :-1]) &
+                (positions[None, :] < target_lengths[:, None] - 1)).sum(dim=1)
+    required = target_lengths + repeated
+    invalid = input_lengths < required
+    if invalid.any().item():
+        rows = invalid.nonzero().flatten().tolist()
+        available = input_lengths[invalid].tolist()
+        needed = required[invalid].tolist()
+        raise ValueError(
+            f'Impossible CTC alignment at batch rows {rows}: output lengths '
+            f'{available}, required lengths {needed} (including repeated labels). '
+            'Reduce the decoder patch stride or inspect the trial labels; '
+            'do not disable the non-finite gradient check.')
+
     # PyTorch 2.5 lacks MPS CTC. This explicit CPU path retains the autograd
     # connection to the GPU decoder and avoids a global implicit fallback.
     log_probs = logits.float().log_softmax(2).permute(1, 0, 2)

@@ -22,6 +22,18 @@ class DeviceSupportTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 select_device('mps')
 
+    def test_impossible_ctc_alignment_rejected(self):
+        criterion = torch.nn.CTCLoss(reduction='none')
+        # Two repeated labels need at least three output positions.
+        with self.assertRaisesRegex(ValueError, 'Impossible CTC alignment'):
+            decoder_ctc_loss(criterion, torch.randn(1, 2, 5),
+                             torch.tensor([[1, 1]]), torch.tensor([2]), torch.tensor([2]))
+        logits = torch.randn(1, 3, 5, requires_grad=True)
+        loss = decoder_ctc_loss(criterion, logits, torch.tensor([[1, 1, 0, 0]]),
+                                torch.tensor([3]), torch.tensor([2])).mean()
+        loss.backward()
+        self.assertTrue(torch.isfinite(logits.grad).all())
+
     @unittest.skipUnless(torch.backends.mps.is_available(), 'Apple GPU unavailable')
     def test_overlapping_patch_values_and_gradients(self):
         for size, stride in [(14, 4), (5, 5)]:

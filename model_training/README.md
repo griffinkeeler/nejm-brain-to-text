@@ -79,3 +79,10 @@ The default 120,000 batches is a full run, not a smoke test.
 For neural-model inference, `evaluate_model.py --device mps` selects Apple GPU
 execution. Its external Redis/language-model service still requires its own
 setup; this option does not port that service to MPS.
+
+The default TCN patch stride is 4. A stride of 5 gives only 40 output positions
+for training trial `t15.2023.10.22/trial_0015`, whose target has 41 phonemes,
+making its CTC alignment impossible. CTC also requires extra positions between
+adjacent repeated labels. The loss helper checks these requirements and raises
+a descriptive error instead of propagating an infinite loss. Use a fresh run
+after changing stride, and keep it fixed when comparing timing results.

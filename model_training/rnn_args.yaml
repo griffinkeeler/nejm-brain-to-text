@@ -11,7 +11,7 @@ model:
   tcn_num_blocks: 5 # number of temporal blocks in the TCN decoder
   tcn_hidden_dim: 384 # latent width for the TCN decoder after patch embedding
   tcn_patch_size: 5 # temporal patch size for the TCN decoder
-  tcn_patch_stride: 5 # temporal patch stride for the TCN decoder
+  tcn_patch_stride: 4 # preserves enough CTC output positions for short, label-dense trials
   tcn_dropout: 0.35 # dropout inside the TCN residual blocks
   tcn_expansion_factor: 2 # channel expansion factor inside each TCN block
 
@@ -38,7 +38,7 @@ save_val_metrics: true # whether to save validation metrics during training
 early_stopping: false # whether to use early stopping based on validation metrics
 early_stopping_val_steps: 20 # number of validation steps to wait before stopping training if no improvement is seen
 
-num_training_batches: 300 # number of training batches to run
+num_training_batches: 500 # number of training batches to run
 lr_scheduler_type: cosine # type of learning rate scheduler to use
 lr_max: 0.005 # maximum learning rate for the main model
 lr_min: 0.0001 # minimum learning rate for the main model
