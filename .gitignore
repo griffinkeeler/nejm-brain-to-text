@@ -7,3 +7,10 @@
 
 # ignore ds_store files
 .DS_Store
+
+# ignore docs
+docs/
+# Local tools and generated training runs
+.idea/
+Miniconda3-*.sh
+model_training/trained_models/
