@@ -182,3 +182,25 @@ PER is a fraction: `0.2` means 20%. The config and selected device are recorded
 in the Text dashboard. Event files are flushed during validation and closed
 even if training raises an error or is interrupted. Logging starts with new
 training runs; existing text logs are not automatically imported.
+
+### GILR memory after the TCN
+
+`model.tcn.use_gilr: true` adds one residual memory layer after the temporal
+blocks and before output normalization. Each channel updates its memory as
+`h = gate * previous_h + (1 - gate) * tanh(impulse)`. Gates and impulses depend
+on normalized TCN features. The classifier receives the original TCN features
+plus a learned projection of this memory. Patch timing and CTC lengths stay fixed.
+
+Full sequences use a portable doubling scan with O(T log T) work and O(log T)
+sequential stages; this is parallelizable but is not a fused optimized kernel,
+so speed improvements must be measured. Recurrence accumulation uses float32
+under mixed precision. `use_gilr: false`, or an older saved config without this
+setting, preserves the previous architecture. Train enabled variants in a fresh
+output directory; evaluation reconstructs the setting from saved args.
+
+`return_state=True` returns the final GILR memory `[batch, hidden_dim]`; `states`
+accepts an initial memory. Optional `input_lengths` (raw frame counts) prevents
+padded positions from updating the returned memory. Training resets memory on
+each forward call. The memory layer supports chunk continuation, but the decoder
+still needs convolution history and patch-boundary handling for equivalent
+streaming inference; carrying GILR state alone does not provide that.

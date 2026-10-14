@@ -252,6 +252,48 @@ class CompactTemporalBlock(nn.Module):
         return self.norm2(residual + x)
 
 
+def affine_scan(a, b, initial_state):
+    """Inclusive parallel doubling scan of h[t] = a[t] * h[t-1] + b[t].
+
+    Uses O(T log T) work, without in-place writes or divisions by gate products.
+    """
+    offset = 1
+    while offset < a.shape[1]:
+        a, b = (
+            torch.cat([a[:, :offset], a[:, offset:] * a[:, :-offset]], dim=1),
+            torch.cat([b[:, :offset], b[:, offset:] + a[:, offset:] * b[:, :-offset]], dim=1),
+        )
+        offset *= 2
+    return b + a * initial_state.unsqueeze(1)
+
+
+class GILRMemory(nn.Module):
+    """Input-gated linear memory with a residual output, on [B, T, C]."""
+    def __init__(self, channels):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels)
+        self.gate_impulse = nn.Linear(channels, 2 * channels)
+        self.out = nn.Linear(channels, channels)
+
+    def forward(self, x, initial_state=None, lengths=None):
+        if x.shape[1] == 0:
+            raise ValueError('GILRMemory requires at least one timestep')
+        gate_logits, impulse_logits = self.gate_impulse(self.norm(x)).chunk(2, dim=-1)
+        # Accumulate in float32 under AMP; retain float64 for numerical tests.
+        dtype = torch.float64 if x.dtype == torch.float64 else torch.float32
+        a = torch.sigmoid(gate_logits.to(dtype))
+        b = (1 - a) * torch.tanh(impulse_logits.to(dtype))
+        if initial_state is None:
+            initial_state = a.new_zeros(x.shape[0], x.shape[2])
+        elif initial_state.shape != (x.shape[0], x.shape[2]):
+            raise ValueError('GILR state must have shape [batch, channels]')
+        if lengths is not None:
+            valid = torch.arange(x.shape[1], device=x.device)[None, :] < lengths.to(x.device)[:, None]
+            a = torch.where(valid.unsqueeze(-1), a, torch.ones_like(a))
+            b = torch.where(valid.unsqueeze(-1), b, torch.zeros_like(b))
+        memory = affine_scan(a, b, initial_state.to(device=x.device, dtype=dtype))
+        return x + self.out(memory.to(x.dtype)), memory[:, -1]
+
 class TCNDecoder(nn.Module):
     """
     Defines the TCN decoder.
@@ -273,6 +315,7 @@ class TCNDecoder(nn.Module):
                  frame_embed_dim=None,
                  use_glu=False,
                  residual_fusion=False,
+                 use_gilr=False,
                  ):
         """
         Args:
@@ -298,6 +341,7 @@ class TCNDecoder(nn.Module):
         if residual_fusion and frame_embed_dim is None:
             raise ValueError('residual_fusion requires frame_embed_dim')
         self.residual_fusion = residual_fusion
+        self.use_gilr = use_gilr
         if frame_embed_dim is not None and (
                 isinstance(frame_embed_dim, bool) or
                 not isinstance(frame_embed_dim, int) or frame_embed_dim <= 0):
@@ -367,11 +411,13 @@ class TCNDecoder(nn.Module):
                 )
             )
 
+        self.memory = GILRMemory(self.hidden_dim) if use_gilr else None
         self.out_norm = nn.LayerNorm(self.hidden_dim)
         self.out = nn.Linear(self.hidden_dim, self.n_classes)
         nn.init.xavier_uniform_(self.out.weight)
 
-    def forward(self, x, day_idx, states = None, return_state = False):
+    def forward(self, x, day_idx, states = None, return_state = False,
+                input_lengths=None):
         """
         x        (tensor)  - batch of examples (trials) of shape: (batch_size, time_series_length, neural_dim)
         day_idx  (tensor)  - tensor which is a list of day indexs corresponding to the day of each example in the batch x.
@@ -409,11 +455,16 @@ class TCNDecoder(nn.Module):
 
         # Convert back to [batch, time, channels] for the classifier head.
         x = x.permute(0, 2, 1)
+        final_memory = None
+        if self.memory is not None:
+            lengths = (self.compute_output_lengths(input_lengths)
+                       if input_lengths is not None else None)
+            x, final_memory = self.memory(x, initial_state=states, lengths=lengths)
         x = self.out_norm(x)
         logits = self.out(x)
 
         if return_state:
-            return logits, None
+            return logits, final_memory
 
         return logits
 

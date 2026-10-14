@@ -28,6 +28,7 @@ def resolve_model_config(model):
             'frame_embed_dim': 'tcn_frame_embed_dim',
             'use_glu': 'tcn_use_glu',
             'residual_fusion': 'tcn_residual_fusion',
+            'use_gilr': 'tcn_use_gilr',
         },
     }
     group = model.get(model_type, {})
