@@ -10,6 +10,7 @@ import editdistance
 import argparse
 
 from rnn_model import GRUDecoder, TCNDecoder
+from model_config import resolve_model_config
 from device_utils import select_device
 from evaluate_model_helpers import *
 
@@ -47,34 +48,35 @@ model_args = OmegaConf.load(os.path.join(model_path, 'checkpoint/args.yaml'))
 device = select_device(args.device, args.gpu_number)
 print(f'Using {device} for model inference.')
 
-model_type = str(model_args['model'].get('model_type', 'gru')).lower()
+model_config = resolve_model_config(model_args['model'])
+model_type = model_config['model_type']
 
 # define model
 if model_type == 'gru':
     model = GRUDecoder(
-        neural_dim = model_args['model']['n_input_features'],
-        n_units = model_args['model']['n_units'],
+        neural_dim = model_config['n_input_features'],
+        n_units = model_config['n_units'],
         n_days = len(model_args['dataset']['sessions']),
         n_classes = model_args['dataset']['n_classes'],
-        rnn_dropout = model_args['model']['rnn_dropout'],
-        input_dropout = model_args['model']['input_network']['input_layer_dropout'],
-        n_layers = model_args['model']['n_layers'],
-        patch_size = model_args['model']['patch_size'],
-        patch_stride = model_args['model']['patch_stride'],
+        rnn_dropout = model_config['rnn_dropout'],
+        input_dropout = model_config['input_network']['input_layer_dropout'],
+        n_layers = model_config['n_layers'],
+        patch_size = model_config['patch_size'],
+        patch_stride = model_config['patch_stride'],
     )
 elif model_type == 'tcn':
     model = TCNDecoder(
-        neural_dim = model_args['model']['n_input_features'],
+        neural_dim = model_config['n_input_features'],
         n_days = len(model_args['dataset']['sessions']),
         n_classes = model_args['dataset']['n_classes'],
-        input_dropout = model_args['model']['input_network']['input_layer_dropout'],
-        patch_size = model_args['model'].get('tcn_patch_size', 5),
-        patch_stride = model_args['model'].get('tcn_patch_stride', 5),
-        hidden_dim = model_args['model'].get('tcn_hidden_dim', 384),
-        kernel_size = model_args['model'].get('kernel_size', 3),
-        tcn_num_blocks = model_args['model'].get('tcn_num_blocks', 5),
-        tcn_dropout = model_args['model'].get('tcn_dropout', 0.35),
-        expansion_factor = model_args['model'].get('tcn_expansion_factor', 2),
+        input_dropout = model_config['input_network']['input_layer_dropout'],
+        patch_size = model_config.get('tcn_patch_size', 5),
+        patch_stride = model_config.get('tcn_patch_stride', 5),
+        hidden_dim = model_config.get('tcn_hidden_dim', 384),
+        kernel_size = model_config.get('kernel_size', 3),
+        tcn_num_blocks = model_config.get('tcn_num_blocks', 5),
+        tcn_dropout = model_config.get('tcn_dropout', 0.35),
+        expansion_factor = model_config.get('tcn_expansion_factor', 2),
     )
 else:
     raise ValueError(f"Invalid model type: {model_type}")

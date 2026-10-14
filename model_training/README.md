@@ -86,3 +86,15 @@ making its CTC alignment impossible. CTC also requires extra positions between
 adjacent repeated labels. The loss helper checks these requirements and raises
 a descriptive error instead of propagating an infinite loss. Use a fresh run
 after changing stride, and keep it fixed when comparing timing results.
+
+## Architecture configuration
+
+`rnn_args.yaml` separates architecture settings into `model.gru` and
+`model.tcn`. Shared neural input settings remain under `model.n_input_features`
+and `model.input_network`; training schedules and dataset settings remain shared.
+Select a group with `model.model_type` or the existing `--model_type` option.
+For example, edit `model.gru.n_units` for GRU width or `model.tcn.hidden_dim`
+for TCN width. Each group's `trainable` flag retains the existing behavior:
+it controls the recurrent layers or TCN residual blocks, not the output head
+or TCN patch embedding. Older checkpoints with flat architecture settings
+remain supported; grouped values take precedence when both formats exist.
