@@ -63,6 +63,7 @@ if model_type == 'gru':
         n_layers = model_config['n_layers'],
         patch_size = model_config['patch_size'],
         patch_stride = model_config['patch_stride'],
+        frame_embed_dim = model_config.get('gru_frame_embed_dim', None),
     )
 elif model_type == 'tcn':
     model = TCNDecoder(
@@ -77,6 +78,7 @@ elif model_type == 'tcn':
         tcn_num_blocks = model_config.get('tcn_num_blocks', 5),
         tcn_dropout = model_config.get('tcn_dropout', 0.35),
         expansion_factor = model_config.get('tcn_expansion_factor', 2),
+        frame_embed_dim = model_config.get('tcn_frame_embed_dim', None),
     )
 else:
     raise ValueError(f"Invalid model type: {model_type}")

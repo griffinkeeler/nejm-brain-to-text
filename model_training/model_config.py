@@ -17,6 +17,7 @@ def resolve_model_config(model):
             'n_units': 'n_units', 'n_layers': 'n_layers',
             'dropout': 'rnn_dropout', 'trainable': 'rnn_trainable',
             'patch_size': 'patch_size', 'patch_stride': 'patch_stride',
+            'frame_embed_dim': 'gru_frame_embed_dim',
         },
         'tcn': {
             'hidden_dim': 'tcn_hidden_dim', 'num_blocks': 'tcn_num_blocks',
@@ -24,6 +25,7 @@ def resolve_model_config(model):
             'expansion_factor': 'tcn_expansion_factor',
             'trainable': 'rnn_trainable', 'patch_size': 'tcn_patch_size',
             'patch_stride': 'tcn_patch_stride',
+            'frame_embed_dim': 'tcn_frame_embed_dim',
         },
     }
     group = model.get(model_type, {})

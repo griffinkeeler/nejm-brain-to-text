@@ -22,6 +22,35 @@ python train_model.py
 ```
 The model will train for 120,000 mini-batches (~3.5 hours on an RTX 4090) and should achieve an aggregate phoneme error rate of 10.1% on the validation partition. We note that the number of training batches and specific model hyperparameters may not be optimal here, and this baseline model is only meant to serve as an example. See [`rnn_args.yaml`](rnn_args.yaml) for a list of all hyperparameters.
 
+### Hierarchical TCN embeddings
+
+The TCN configuration uses `model.tcn.frame_embed_dim: 128` to encode each
+frame with LayerNorm, a shared linear projection, and GELU before temporal
+patching. Set this to `256` for a wider frame encoder or `null` for the original
+patch embedding. `hidden_dim` independently controls the patch and TCN width.
+Patch size and stride, and therefore CTC output lengths, are unchanged.
+
+Train each variant from scratch in a fresh output directory, keeping other
+settings fixed when comparing validation PER. Baseline checkpoints require
+`frame_embed_dim: null`; older saved configs without this setting automatically
+use the baseline architecture. Evaluation reads the setting from the saved
+checkpoint args.
+
+### Hierarchical GRU embeddings
+
+Set `model.model_type: gru` to select the GRU. Its
+`model.gru.frame_embed_dim: 128` setting applies the same shared frame encoder
+as the TCN, then concatenates encoded frames and projects each patch to
+`n_units` before the GRU. Existing patch size (14) and stride (4) are retained;
+set patch size to 5 explicitly if you want five-frame patches. With patching
+disabled (`patch_size: 0`), the projection operates on individual encoded frames.
+
+Set `frame_embed_dim: null` for the baseline GRU. Older checkpoint configs
+without the setting also use the baseline. Train hierarchical variants from
+scratch in fresh output directories; their GRU input weights and embedding
+layers differ from baseline checkpoints. Evaluation reconstructs the model
+from saved args, including the frame encoder width.
+
 ## Evaluation
 ### Start redis server
 To evaluate the model, first start a redis server on `localhost` in terminal with:
