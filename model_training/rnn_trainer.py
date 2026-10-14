@@ -24,6 +24,7 @@ torch.backends.cudnn.deterministic = True # makes training more reproducible
 torch._dynamo.config.cache_size_limit = 64
 
 from rnn_model import GRUDecoder, TCNDecoder
+from model_config import resolve_model_config
 from device_utils import select_device, decoder_ctc_loss, synchronize_device
 
 class BrainToTextDecoder_Trainer:
@@ -113,34 +114,35 @@ class BrainToTextDecoder_Trainer:
             random.seed(self.args['seed'])
             torch.manual_seed(self.args['seed'])
 
-        model_type = str(self.args['model'].get('model_type', 'gru')).lower()
+        model_config = resolve_model_config(self.args['model'])
+        model_type = model_config['model_type']
 
         # Initialize the model
         if model_type == 'gru':
             self.model = GRUDecoder(
-                neural_dim = self.args['model']['n_input_features'],
-                n_units = self.args['model']['n_units'],
+                neural_dim = model_config['n_input_features'],
+                n_units = model_config['n_units'],
                 n_days = len(self.args['dataset']['sessions']),
                 n_classes  = self.args['dataset']['n_classes'],
-                rnn_dropout = self.args['model']['rnn_dropout'],
-                input_dropout = self.args['model']['input_network']['input_layer_dropout'],
-                n_layers = self.args['model']['n_layers'],
-                patch_size = self.args['model']['patch_size'],
-                patch_stride = self.args['model']['patch_stride'],
+                rnn_dropout = model_config['rnn_dropout'],
+                input_dropout = model_config['input_network']['input_layer_dropout'],
+                n_layers = model_config['n_layers'],
+                patch_size = model_config['patch_size'],
+                patch_stride = model_config['patch_stride'],
             )
         elif model_type == 'tcn':
             self.model = TCNDecoder(
-                neural_dim = self.args['model']['n_input_features'],
+                neural_dim = model_config['n_input_features'],
                 n_days = len(self.args['dataset']['sessions']),
                 n_classes = self.args['dataset']['n_classes'],
-                input_dropout = self.args['model']['input_network']['input_layer_dropout'],
-                patch_size = self.args['model'].get('tcn_patch_size', 5),
-                patch_stride = self.args['model'].get('tcn_patch_stride', 5),
-                hidden_dim = self.args['model'].get('tcn_hidden_dim', 384),
-                kernel_size = self.args['model'].get('kernel_size', 3),
-                tcn_num_blocks = self.args['model'].get('tcn_num_blocks', 5),
-                tcn_dropout = self.args['model'].get('tcn_dropout', 0.35),
-                expansion_factor = self.args['model'].get('tcn_expansion_factor', 2),
+                input_dropout = model_config['input_network']['input_layer_dropout'],
+                patch_size = model_config.get('tcn_patch_size', 5),
+                patch_stride = model_config.get('tcn_patch_stride', 5),
+                hidden_dim = model_config.get('tcn_hidden_dim', 384),
+                kernel_size = model_config.get('kernel_size', 3),
+                tcn_num_blocks = model_config.get('tcn_num_blocks', 5),
+                tcn_dropout = model_config.get('tcn_dropout', 0.35),
+                expansion_factor = model_config.get('tcn_expansion_factor', 2),
             )
         else:
             raise ValueError(f"Invalid model type: {model_type}")
@@ -269,10 +271,10 @@ class BrainToTextDecoder_Trainer:
 
         # Set rnn and/or input layers to not trainable if specified 
         for name, param in self.model.named_parameters():
-            if not self.args['model']['rnn_trainable'] and ('gru' in name or 'residual_blocks' in name):
+            if not model_config['rnn_trainable'] and ('gru' in name or 'residual_blocks' in name):
                 param.requires_grad = False
 
-            elif not self.args['model']['input_network']['input_trainable'] and 'day' in name:
+            elif not model_config['input_network']['input_trainable'] and 'day' in name:
                 param.requires_grad = False
 
         # Send model to device 
