@@ -215,7 +215,8 @@ class CausalConv1d(nn.Module):
 
 class CompactTemporalBlock(nn.Module):
     """Compact causal TCN block with depthwise temporal mixing."""
-    def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.0, expansion_factor=2):
+    def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.0, expansion_factor=2,
+                 use_glu=False):
         super().__init__()
 
         expanded_channels = channels * expansion_factor
@@ -228,9 +229,11 @@ class CompactTemporalBlock(nn.Module):
             dilation=dilation,
             groups=channels,
         )
-        self.pointwise_in = PortableConv1d(channels, expanded_channels, kernel_size=1)
+        self.pointwise_in = PortableConv1d(
+            channels, expanded_channels * (2 if use_glu else 1), kernel_size=1)
         self.pointwise_out = PortableConv1d(expanded_channels, channels, kernel_size=1)
         self.activation = nn.GELU()
+        self.expansion_activation = nn.GLU(dim=1) if use_glu else nn.GELU()
         self.dropout = nn.Dropout(dropout)
         self.norm2 = ChannelLayerNorm(channels)
 
@@ -241,7 +244,7 @@ class CompactTemporalBlock(nn.Module):
         x = self.depthwise(x)
         x = self.activation(x)
         x = self.pointwise_in(x)
-        x = self.activation(x)
+        x = self.expansion_activation(x)
         x = self.dropout(x)
         x = self.pointwise_out(x)
         x = self.dropout(x)
@@ -268,6 +271,7 @@ class TCNDecoder(nn.Module):
                  tcn_dropout=0.35,
                  expansion_factor=2,
                  frame_embed_dim=None,
+                 use_glu=False,
                  ):
         """
         Args:
@@ -289,6 +293,7 @@ class TCNDecoder(nn.Module):
         self.tcn_num_blocks = tcn_num_blocks
         self.tcn_dropout = tcn_dropout
         self.expansion_factor = expansion_factor
+        self.use_glu = use_glu
         if frame_embed_dim is not None and (
                 isinstance(frame_embed_dim, bool) or
                 not isinstance(frame_embed_dim, int) or frame_embed_dim <= 0):
@@ -338,6 +343,7 @@ class TCNDecoder(nn.Module):
                     dilation=dilation,
                     dropout=tcn_dropout,
                     expansion_factor=expansion_factor,
+                    use_glu=use_glu,
                 )
             )
 
