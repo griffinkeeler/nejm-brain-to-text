@@ -26,6 +26,8 @@ def resolve_model_config(model):
             'trainable': 'rnn_trainable', 'patch_size': 'tcn_patch_size',
             'patch_stride': 'tcn_patch_stride',
             'frame_embed_dim': 'tcn_frame_embed_dim',
+            'use_glu': 'tcn_use_glu',
+            'residual_fusion': 'tcn_residual_fusion',
         },
     }
     group = model.get(model_type, {})

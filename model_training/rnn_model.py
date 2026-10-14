@@ -272,6 +272,7 @@ class TCNDecoder(nn.Module):
                  expansion_factor=2,
                  frame_embed_dim=None,
                  use_glu=False,
+                 residual_fusion=False,
                  ):
         """
         Args:
@@ -294,6 +295,9 @@ class TCNDecoder(nn.Module):
         self.tcn_dropout = tcn_dropout
         self.expansion_factor = expansion_factor
         self.use_glu = use_glu
+        if residual_fusion and frame_embed_dim is None:
+            raise ValueError('residual_fusion requires frame_embed_dim')
+        self.residual_fusion = residual_fusion
         if frame_embed_dim is not None and (
                 isinstance(frame_embed_dim, bool) or
                 not isinstance(frame_embed_dim, int) or frame_embed_dim <= 0):
@@ -332,6 +336,22 @@ class TCNDecoder(nn.Module):
         )
         nn.init.xavier_uniform_(self.patch_embed[1].weight)
 
+        self.raw_patch_embed = None
+        self.output_projection = None
+        if residual_fusion:
+            raw_patch_dim = self.neural_dim * self.patch_size
+            self.raw_patch_embed = nn.Sequential(
+                nn.LayerNorm(raw_patch_dim),
+                nn.Linear(raw_patch_dim, self.hidden_dim),
+                nn.LayerNorm(self.hidden_dim),
+            )
+            nn.init.xavier_uniform_(self.raw_patch_embed[1].weight)
+            self.output_projection = nn.Sequential(
+                PortableConv1d(2 * self.hidden_dim, 2 * self.hidden_dim, kernel_size=1),
+                nn.GELU(),
+                PortableConv1d(2 * self.hidden_dim, self.hidden_dim, kernel_size=1),
+            )
+
         self.residual_blocks = nn.ModuleList()
 
         for k in range(tcn_num_blocks):
@@ -367,13 +387,22 @@ class TCNDecoder(nn.Module):
         if self.input_dropout > 0:
             x = self.day_layer_dropout(x)
 
+        raw_embedding = None
+        if self.residual_fusion:
+            raw_embedding = self.raw_patch_embed(
+                temporal_patches(x, self.patch_size, self.patch_stride))
         if self.frame_embed is not None:
             x = self.frame_embed(x)
         x = temporal_patches(x, self.patch_size, self.patch_stride)
         x = self.patch_embed(x)
 
         # Conv1d expects [batch, channels, time].
-        x = x.permute(0, 2, 1)
+        if self.residual_fusion:
+            fused = self.output_projection(
+                torch.cat([raw_embedding, x], dim=-1).transpose(1, 2))
+            x = raw_embedding.transpose(1, 2) + fused
+        else:
+            x = x.permute(0, 2, 1)
 
         for block in self.residual_blocks:
             x = block(x)

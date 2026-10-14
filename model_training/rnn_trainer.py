@@ -145,6 +145,8 @@ class BrainToTextDecoder_Trainer:
                 tcn_dropout = model_config.get('tcn_dropout', 0.35),
                 expansion_factor = model_config.get('tcn_expansion_factor', 2),
                 frame_embed_dim = model_config.get('tcn_frame_embed_dim', None),
+                use_glu = model_config.get('tcn_use_glu', False),
+                residual_fusion = model_config.get('tcn_residual_fusion', False),
             )
         else:
             raise ValueError(f"Invalid model type: {model_type}")

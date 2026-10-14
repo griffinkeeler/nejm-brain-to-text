@@ -36,6 +36,32 @@ settings fixed when comparing validation PER. Baseline checkpoints require
 use the baseline architecture. Evaluation reads the setting from the saved
 checkpoint args.
 
+### Residual patch fusion in the TCN
+
+`model.tcn.residual_fusion: true` requires a non-null `frame_embed_dim`.
+The raw branch projects concatenated day-transformed neural frames to
+`hidden_dim`; the hierarchical branch encodes frames before patch projection.
+Their concatenated embeddings pass through pointwise convolutions
+`2H → 2H → GELU → H`, then the raw embedding is added to the fusion output
+before the TCN. At `hidden_dim: 128`, fusion is `256 → 256 → 128`.
+Both branches share the same day-transformed, dropped-out input and patch timing.
+This adds parameters and computation but leaves CTC output lengths unchanged.
+GLU gating can be used independently. Set `residual_fusion: false` to restore
+the previous single-branch encoder. Older saved configs default to false;
+train fusion variants from scratch in a fresh output directory. Evaluation
+reconstructs fusion from saved args.
+
+### GLU gating in the TCN
+
+`model.tcn.use_glu: true` enables a gated pointwise expansion inside each
+compact temporal block: `C → 2E → GLU → E → C`, where
+`E = C * expansion_factor`. The depthwise causal convolution, its GELU,
+normalizations, dropout, residual connection, and CTC output lengths are retained.
+The wider input projection adds parameters and computation. Set `use_glu: false`
+for the original GELU expansion; older saved configs without the setting also
+use that architecture. Gated models require fresh training because the input
+projection weights have a different shape. Evaluation reads the saved setting.
+
 ### Hierarchical GRU embeddings
 
 Set `model.model_type: gru` to select the GRU. Its
