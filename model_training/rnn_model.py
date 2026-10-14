@@ -34,6 +34,7 @@ class GRUDecoder(nn.Module):
                  n_layers = 5, 
                  patch_size = 0,
                  patch_stride = 0,
+                 frame_embed_dim = None,
                  ):
         '''
         neural_dim  (int)      - number of channels in a single timestep (e.g. 512)
@@ -45,6 +46,7 @@ class GRUDecoder(nn.Module):
         n_layers    (int)      - number of recurrent layers 
         patch_size  (int)      - the number of timesteps to concat on initial input layer - a value of 0 will disable this "input concat" step 
         patch_stride(int)      - the number of timesteps to stride over when concatenating initial input 
+        frame_embed_dim(int)  - optional shared frame width; patches project to n_units
         '''
         super(GRUDecoder, self).__init__()
         
@@ -59,6 +61,12 @@ class GRUDecoder(nn.Module):
         
         self.patch_size = patch_size
         self.patch_stride = patch_stride
+
+        if frame_embed_dim is not None and (
+                isinstance(frame_embed_dim, bool) or
+                not isinstance(frame_embed_dim, int) or frame_embed_dim <= 0):
+            raise ValueError('frame_embed_dim must be a positive integer or None')
+        self.frame_embed_dim = frame_embed_dim
 
         # Parameters for the day-specific input layers
         self.day_layer_activation = nn.Softsign() # basically a shallower tanh 
@@ -78,6 +86,24 @@ class GRUDecoder(nn.Module):
         # If we are using "strided inputs", then the input size of the first recurrent layer will actually be in_size * patch_size
         if self.patch_size > 0:
             self.input_size *= self.patch_size
+
+        self.frame_embed = None
+        self.patch_embed = None
+        if frame_embed_dim is not None:
+            self.frame_embed = nn.Sequential(
+                nn.LayerNorm(self.neural_dim),
+                nn.Linear(self.neural_dim, frame_embed_dim),
+                nn.GELU(),
+            )
+            patch_dim = frame_embed_dim * max(self.patch_size, 1)
+            self.patch_embed = nn.Sequential(
+                nn.LayerNorm(patch_dim),
+                nn.Linear(patch_dim, self.n_units),
+                nn.LayerNorm(self.n_units),
+            )
+            nn.init.xavier_uniform_(self.frame_embed[1].weight)
+            nn.init.xavier_uniform_(self.patch_embed[1].weight)
+            self.input_size = self.n_units
 
         self.gru = nn.GRU(
             input_size = self.input_size,
@@ -120,9 +146,14 @@ class GRUDecoder(nn.Module):
             x = self.day_layer_dropout(x)
 
         # (Optionally) Perform input concat operation
+        if self.frame_embed is not None:
+            x = self.frame_embed(x)
         if self.patch_size > 0: 
   
             x = temporal_patches(x, self.patch_size, self.patch_stride)
+
+        if self.patch_embed is not None:
+            x = self.patch_embed(x)
 
         # Determine initial hidden states
         if states is None:
@@ -236,6 +267,7 @@ class TCNDecoder(nn.Module):
                  tcn_num_blocks=5,
                  tcn_dropout=0.35,
                  expansion_factor=2,
+                 frame_embed_dim=None,
                  ):
         """
         Args:
@@ -257,6 +289,11 @@ class TCNDecoder(nn.Module):
         self.tcn_num_blocks = tcn_num_blocks
         self.tcn_dropout = tcn_dropout
         self.expansion_factor = expansion_factor
+        if frame_embed_dim is not None and (
+                isinstance(frame_embed_dim, bool) or
+                not isinstance(frame_embed_dim, int) or frame_embed_dim <= 0):
+            raise ValueError('frame_embed_dim must be a positive integer or None')
+        self.frame_embed_dim = frame_embed_dim
 
         # Parameters for the day-specific input layers
         self.day_layer_activation = nn.Softsign()  # basically a shallower tanh
@@ -271,7 +308,18 @@ class TCNDecoder(nn.Module):
 
         self.day_layer_dropout = nn.Dropout(input_dropout)
 
-        patch_dim = self.neural_dim * self.patch_size
+        self.frame_embed = None
+        patch_feature_dim = self.neural_dim
+        if frame_embed_dim is not None:
+            self.frame_embed = nn.Sequential(
+                nn.LayerNorm(self.neural_dim),
+                nn.Linear(self.neural_dim, frame_embed_dim),
+                nn.GELU(),
+            )
+            nn.init.xavier_uniform_(self.frame_embed[1].weight)
+            patch_feature_dim = frame_embed_dim
+
+        patch_dim = patch_feature_dim * self.patch_size
         self.patch_embed = nn.Sequential(
             nn.LayerNorm(patch_dim),
             nn.Linear(patch_dim, self.hidden_dim),
@@ -313,6 +361,8 @@ class TCNDecoder(nn.Module):
         if self.input_dropout > 0:
             x = self.day_layer_dropout(x)
 
+        if self.frame_embed is not None:
+            x = self.frame_embed(x)
         x = temporal_patches(x, self.patch_size, self.patch_stride)
         x = self.patch_embed(x)
 
