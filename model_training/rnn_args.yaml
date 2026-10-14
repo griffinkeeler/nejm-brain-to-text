@@ -3,6 +3,7 @@ model:
   n_input_features: 512 # number of input features in the neural data. (2 features per electrode, 256 electrodes)
   gru:
     n_units: 128 # hidden units per GRU layer
+    frame_embed_dim: 128 # shared frame encoder followed by patch projection to n_units; null for baseline
     n_layers: 2 # number of recurrent layers
     dropout: 0.4 # dropout between GRU layers
     trainable: true # whether recurrent layers are trainable
@@ -11,10 +12,12 @@ model:
 
   tcn:
     hidden_dim: 128 # latent width after patch embedding
-    num_blocks: 7 # number of dilated temporal blocks
+    frame_embed_dim: 128 # shared per-frame encoder width; null disables it for baseline checkpoints
+    num_blocks: 6 # number of dilated temporal blocks
     kernel_size: 3 # temporal convolution kernel size
-    dropout: 0.35 # dropout inside residual blocks
+    dropout: 0.10 # dropout inside residual blocks
     expansion_factor: 2 # channel expansion inside each block
+    use_glu: true # gated pointwise expansion; false restores GELU baseline blocks
     trainable: true # whether residual blocks are trainable
     patch_size: 5 # number of input timesteps per patch
     patch_stride: 4 # preserves enough output positions for CTC alignment
