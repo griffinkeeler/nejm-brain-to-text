@@ -98,3 +98,32 @@ for TCN width. Each group's `trainable` flag retains the existing behavior:
 it controls the recurrent layers or TCN residual blocks, not the output head
 or TCN patch embedding. Older checkpoints with flat architecture settings
 remain supported; grouped values take precedence when both formats exist.
+
+## TensorBoard
+
+Install TensorBoard in the training environment with `python -m pip install tensorboard`. Logging is enabled by `tensorboard.enabled: true`
+in `rnn_args.yaml`; set it to `false` to train without the dependency.
+Each new run writes events to `<output_dir>/tensorboard`.
+
+From `model_training`, start the dashboard in a second terminal:
+
+```bash
+conda activate b2txt25
+tensorboard --logdir trained_models --port 6006
+```
+
+Open http://localhost:6006 and select the GRU/TCN runs to compare. Logged charts:
+
+- `train/ctc_loss` and gradient norm before clipping, at the training log interval.
+- `validation/per`, best PER, CTC loss, and PER by session, at validation steps.
+- Learning rates actually used for the logged update, by optimizer group.
+- Training-step, validation, elapsed, and total run times in seconds.
+- `convergence/per_by_elapsed_second`: PER against elapsed seconds (choose the
+  **Step** horizontal axis for this chart). Other charts use completed batches
+  as their step axis. Elapsed time includes data loading, validation, and prior
+  checkpoint/logging overhead, but excludes trainer initialization.
+
+PER is a fraction: `0.2` means 20%. The config and selected device are recorded
+in the Text dashboard. Event files are flushed during validation and closed
+even if training raises an error or is interrupted. Logging starts with new
+training runs; existing text logs are not automatically imported.

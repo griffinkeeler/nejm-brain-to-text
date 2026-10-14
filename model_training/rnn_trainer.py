@@ -11,7 +11,7 @@ import logging
 import sys
 import json
 import pickle
-from contextlib import nullcontext
+from contextlib import nullcontext, closing
 
 from dataset import BrainToTextDataset, train_test_split_indicies
 from data_augmentations import gauss_smooth
@@ -513,6 +513,26 @@ class BrainToTextDecoder_Trainer:
         return features, n_time_steps
 
     def train(self):
+        """Train and always flush/close event files, including on interruption."""
+        writer = None
+        if self.args.get('tensorboard', {}).get('enabled', False):
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+            except ImportError as exc:
+                raise RuntimeError(
+                    'TensorBoard logging is enabled. Install it with '
+                    '`python -m pip install tensorboard` or set tensorboard.enabled: false.'
+                ) from exc
+            log_dir = os.path.join(self.args['output_dir'], 'tensorboard')
+            writer = SummaryWriter(log_dir=log_dir, flush_secs=10)
+            self.logger.info(f'TensorBoard events: {log_dir}')
+        with closing(writer) if writer is not None else nullcontext():
+            if writer is not None:
+                writer.add_text('run/config', '```yaml\n' + OmegaConf.to_yaml(self.args) + '\n```', 0)
+                writer.add_text('run/device', str(self.device), 0)
+            return self._train(writer)
+
+    def _train(self, writer=None):
         '''
         Train the model 
         '''
@@ -572,6 +592,9 @@ class BrainToTextDecoder_Trainer:
             
             loss.backward()
 
+            grad_norm = None
+            step_lrs = [group["lr"] for group in self.optimizer.param_groups]
+
             # Clip gradient
             if self.args['grad_norm_clip_value'] > 0: 
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 
@@ -588,11 +611,23 @@ class BrainToTextDecoder_Trainer:
             train_step_duration = time.time() - start_time
             train_losses.append(loss.detach().item())
 
+            if writer is not None and (
+                i % self.args['batches_per_train_log'] == 0
+                or i == self.args['num_training_batches'] - 1
+            ):
+                step = i + 1
+                writer.add_scalar('train/ctc_loss', train_losses[-1], step)
+                if grad_norm is not None:
+                    writer.add_scalar('train/gradient_norm_before_clip', float(grad_norm), step)
+                writer.add_scalar('timing/train_step_seconds', train_step_duration, step)
+                for group, lr in zip(self.optimizer.param_groups, step_lrs):
+                    writer.add_scalar(f'learning_rate/{group["group_type"]}', lr, step)
+
             # Incrementally log training progress
             if i % self.args['batches_per_train_log'] == 0:
                 self.logger.info(f'Train batch {i}: ' +
                         f'loss: {(loss.detach().item()):.2f} ' +
-                        f'grad norm: {grad_norm:.2f} '
+                        f'grad norm: {float(grad_norm) if grad_norm is not None else float("nan"):.2f} '
                         f'time: {train_step_duration:.3f}')
 
             # Incrementally run a test step
@@ -616,6 +651,24 @@ class BrainToTextDecoder_Trainer:
                 if self.args['log_individual_day_val_PER']:
                     for day in val_metrics['day_PERs'].keys():
                         self.logger.info(f"{self.args['dataset']['sessions'][day]} val PER: {val_metrics['day_PERs'][day]['total_edit_distance'] / val_metrics['day_PERs'][day]['total_seq_length']:0.4f}")
+
+                if writer is not None:
+                    step = i + 1
+                    elapsed = time.time() - train_start_time
+                    writer.add_scalar('validation/per', val_metrics['avg_PER'], step)
+                    writer.add_scalar('validation/ctc_loss', val_metrics['avg_loss'], step)
+                    writer.add_scalar('validation/best_per', min(self.best_val_PER, val_metrics['avg_PER']), step)
+                    writer.add_scalar('timing/elapsed_seconds', elapsed, step)
+                    writer.add_scalar('timing/validation_seconds', val_step_duration, step)
+                    # Explicit elapsed-time axis, independent of dashboard start times.
+                    writer.add_scalar('convergence/per_by_elapsed_second',
+                                      val_metrics['avg_PER'], int(elapsed))
+                    for day, counts in val_metrics['day_PERs'].items():
+                        if counts['total_seq_length'] > 0:
+                            session = self.args['dataset']['sessions'][day]
+                            writer.add_scalar(f'validation_by_session/{session}/per',
+                                              counts['total_edit_distance'] / counts['total_seq_length'], step)
+                    writer.flush()
 
                 # Save metrics 
                 val_PERs.append(val_metrics['avg_PER'])
@@ -663,6 +716,9 @@ class BrainToTextDecoder_Trainer:
         # Log final training steps 
         training_duration = time.time() - train_start_time
 
+
+        if writer is not None:
+            writer.add_scalar('timing/total_run_seconds', training_duration, i + 1)
 
         self.logger.info(f'Best avg val PER achieved: {self.best_val_PER:.5f}')
         self.logger.info(f'Total training time: {(training_duration / 60):.2f} minutes')
