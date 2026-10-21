@@ -517,7 +517,7 @@ class BrainToTextDecoder_Trainer:
         
         return features, n_time_steps
 
-    def train(self):
+    def train(self, validation_callback=None):
         """Train and always flush/close event files, including on interruption."""
         writer = None
         if self.args.get('tensorboard', {}).get('enabled', False):
@@ -535,9 +535,9 @@ class BrainToTextDecoder_Trainer:
             if writer is not None:
                 writer.add_text('run/config', '```yaml\n' + OmegaConf.to_yaml(self.args) + '\n```', 0)
                 writer.add_text('run/device', str(self.device), 0)
-            return self._train(writer)
+            return self._train(writer, validation_callback)
 
-    def _train(self, writer=None):
+    def _train(self, writer=None, validation_callback=None):
         '''
         Train the model 
         '''
@@ -712,6 +712,9 @@ class BrainToTextDecoder_Trainer:
                 # Optionally save this validation checkpoint, regardless of performance
                 if self.args['save_all_val_steps']:
                     self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/checkpoint_batch_{i}', val_metrics['avg_PER'])
+
+                if validation_callback is not None:
+                    validation_callback(i + 1, val_metrics)
 
                 # Early stopping 
                 if early_stopping and (val_steps_since_improvement >= early_stopping_val_steps):
