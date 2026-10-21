@@ -204,3 +204,56 @@ padded positions from updating the returned memory. Training resets memory on
 each forward call. The memory layer supports chunk continuation, but the decoder
 still needs convolution history and patch-boundary handling for equivalent
 streaming inference; carrying GILR state alone does not provide that.
+
+## Tests
+
+From `model_training`, run the test suite with:
+
+```bash
+python -m unittest discover -s tests
+```
+
+## Bayesian hyperparameter tuning for the TCN
+
+Install the optional dependency in your training environment:
+
+```bash
+python -m pip install optuna
+```
+
+From `model_training`, run Optuna TPE search using best validation PER:
+
+```bash
+python tune_tcn.py --device mps --n_trials 30 --num_training_batches 10000 --output_dir trained_models/tcn_search
+```
+
+Use `--device cuda` for CUDA. `--config` selects a base training YAML. Each
+trial trains from scratch with the same configured training/data seeds and split.
+It searches hidden width (128/256/384), blocks (4–8), kernel size (3–7), expansion
+(1/2/4), TCN and input dropout (0–0.5), main/day maximum learning rates
+(1e-4–1e-2, log scale), and main weight decay (1e-6–1e-2, log scale).
+Minimum learning rates retain their configured ratios to the maxima. Patch size,
+stride, embedding/fusion/GLU/GILR options, batch size and data settings stay fixed.
+Edit `trial_config` in `tune_tcn.py` to adjust the search ranges.
+
+Median pruning starts after five completed trials and three validation intervals;
+use `--no_pruning` to disable it. Existing early stopping remains enabled if
+configured. Choose a batch budget long enough to measure meaningful convergence.
+The held-out test set is not used as the objective.
+
+Trials save logs, configs and best checkpoints in separate `trial_00000`, etc.
+directories. The SQLite study saves results; repeat the same command and directory
+to add `--n_trials` more trials. Changed base configs require a new directory.
+Run one search process per output directory. Resuming preserves trial history,
+but does not exactly reproduce an uninterrupted sampler's suggestion sequence.
+
+The winning checkpoint remains in its trial's `checkpoint/best_checkpoint`.
+After each completed trial, `best_args.yaml` saves the current winner's settings
+with a fresh retraining output path:
+
+```bash
+python train_model.py --config trained_models/tcn_search/best_args.yaml
+```
+
+Retraining uses the search budget; edit the saved configuration for a longer
+final run. Check promising settings across multiple seeds before test evaluation.
