@@ -18,6 +18,8 @@ model:
     dropout: 0.10 # dropout inside residual blocks
     expansion_factor: 2 # channel expansion inside each block
     use_glu: true # gated pointwise expansion; false restores GELU baseline blocks
+    residual_fusion: false # fuse frame and patch embeddings; requires frame_embed_dim
+    use_gilr: false # add a residual recurrent memory layer after temporal blocks
     trainable: true # whether residual blocks are trainable
     patch_size: 5 # number of input timesteps per patch
     patch_stride: 4 # preserves enough output positions for CTC alignment
