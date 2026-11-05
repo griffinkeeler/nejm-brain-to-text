@@ -5,7 +5,7 @@ from rnn_trainer import BrainToTextDecoder_Trainer
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train a GRU or TCN phoneme decoder.')
+    parser = argparse.ArgumentParser(description='Train a GRU or TCN with phoneme or whole-word CTC targets.')
     parser.add_argument('--config', default='rnn_args.yaml')
     parser.add_argument('--device', choices=['auto', 'cpu', 'cuda', 'mps'])
     parser.add_argument('--output_dir', help='New run directory; must not already exist.')

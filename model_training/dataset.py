@@ -22,7 +22,8 @@ class BrainToTextDataset(Dataset):
             days_per_batch = 1, 
             random_seed = -1,
             must_include_days = None,
-            feature_subset = None
+            feature_subset = None,
+            word_tokenizer = None
             ): 
         '''
         trial_indicies:  (dict)      - dictionary with day numbers as keys and lists of trial indices as values
@@ -41,6 +42,7 @@ class BrainToTextDataset(Dataset):
             np.random.seed(random_seed)
             torch.manual_seed(random_seed)
 
+        self.word_tokenizer = word_tokenizer
         self.split = split
 
         # Ensure the split is valid
@@ -147,6 +149,14 @@ class BrainToTextDataset(Dataset):
 
         # Pad data to form a cohesive batch
         batch['input_features'] = pad_sequence(batch['input_features'], batch_first = True, padding_value = 0)
+        if self.word_tokenizer is not None:
+            from word_tokenizer import transcript_text
+            targets = [self.word_tokenizer.encode(transcript_text(t)) for t in batch['transcriptions']]
+            if any(not t for t in targets):
+                raise ValueError('Empty word transcription in batch')
+            batch['seq_class_ids'] = [torch.tensor(t, dtype=torch.long) for t in targets]
+            batch['phone_seq_lens'] = [len(t) for t in targets]
+
         batch['seq_class_ids'] = pad_sequence(batch['seq_class_ids'], batch_first = True, padding_value = 0)
 
         batch['n_time_steps'] = torch.tensor(batch['n_time_steps']) 

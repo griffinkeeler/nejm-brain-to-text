@@ -8,6 +8,9 @@ import time
 from tqdm import tqdm
 import editdistance
 import argparse
+import json
+from word_tokenizer import WordTokenizer, words
+from data_augmentations import gauss_smooth
 
 from rnn_model import GRUDecoder, TCNDecoder
 from model_config import resolve_model_config
@@ -16,6 +19,7 @@ from evaluate_model_helpers import *
 
 # argument parser for command line arguments
 parser = argparse.ArgumentParser(description='Evaluate a pretrained RNN model on the copy task dataset.')
+parser.add_argument('--predictions_path', default='word_predictions.json', help='Word-mode prediction output JSON.')
 parser.add_argument('--model_path', type=str, default='../data/t15_pretrained_rnn_baseline',
                     help='Path to the pretrained model directory (relative to the current working directory).')
 parser.add_argument('--data_dir', type=str, default='../data/hdf5_data_final',
@@ -138,11 +142,49 @@ with tqdm(total=total_test_trials, desc='Predicting phoneme sequences', unit='tr
             neural_input = torch.tensor(neural_input, device=device, dtype=neural_input_dtype)
 
             # run decoding step
-            logits = runSingleDecodingStep(neural_input, input_layer, model, model_args, device)
+            if model_args.get('target_type', 'phoneme') == 'word':
+                # Match training validation preprocessing, including same-length smoothing.
+                neural_input = neural_input.float()
+                transforms = model_args['dataset']['data_transforms']
+                if transforms['smooth_data']:
+                    neural_input = gauss_smooth(neural_input, device,
+                                               transforms['smooth_kernel_std'],
+                                               transforms['smooth_kernel_size'])
+                with torch.no_grad():
+                    logits = model(neural_input, torch.tensor([input_layer], device=device)).float().cpu().numpy()
+            else:
+                logits = runSingleDecodingStep(neural_input, input_layer, model, model_args, device)
             data['logits'].append(logits)
 
             pbar.update(1)
 pbar.close()
+
+
+# Whole-word CTC predicts text directly and does not contact the external LM.
+if model_args.get('target_type', 'phoneme') == 'word':
+    vocab = WordTokenizer.load(os.path.join(model_path, 'checkpoint', 'word_vocab.json'))
+    if checkpoint.get('word_vocab') != vocab.tokens:
+        raise ValueError('Checkpoint and word vocabulary disagree')
+    rows, errors, word_count, unknown = [], 0, 0, 0
+    for session, data in test_data.items():
+        for trial, trial_logits in enumerate(data['logits']):
+            prediction = vocab.decode_ctc(np.argmax(trial_logits[0], axis=-1))
+            row = {'session': session, 'block': int(data['block_num'][trial]),
+                   'trial': int(data['trial_num'][trial]), 'prediction': ' '.join(prediction)}
+            if eval_type == 'val':
+                reference = words(data['sentence_label'][trial])
+                errors += editdistance.eval(prediction, reference)
+                word_count += len(reference)
+                unknown += sum(w not in vocab.ids for w in reference)
+                row['reference'] = ' '.join(reference)
+            rows.append(row)
+    result = {'predictions': rows, 'target_type': 'word'}
+    if eval_type == 'val':
+        result.update(wer=errors / max(1, word_count), unknown_word_rate=unknown / max(1, word_count))
+        print(f"Word CTC WER: {result['wer']:.5f}; unknown-word rate: {result['unknown_word_rate']:.5f}")
+    with open(args.predictions_path, 'w') as output:
+        json.dump(result, output, indent=2)
+    raise SystemExit(0)
 
 
 # convert logits to phoneme sequences and print them out

@@ -13,6 +13,7 @@ import json
 import pickle
 from contextlib import nullcontext, closing
 
+from word_tokenizer import WordTokenizer, training_transcripts, transcript_text, words, load_backbone
 from dataset import BrainToTextDataset, train_test_split_indicies
 from data_augmentations import gauss_smooth
 
@@ -113,6 +114,28 @@ class BrainToTextDecoder_Trainer:
             np.random.seed(self.args['seed'])
             random.seed(self.args['seed'])
             torch.manual_seed(self.args['seed'])
+
+        self.target_type = self.args.get('target_type', 'phoneme')
+        if self.target_type not in ('phoneme', 'word'):
+            raise ValueError('target_type must be phoneme or word')
+        self.word_tokenizer = None
+        self.error_label = 'WER' if self.target_type == 'word' else 'PER'
+        if self.target_type == 'word':
+            paths = [os.path.join(self.args['dataset']['dataset_dir'], day, 'data_train.hdf5')
+                     for day in self.args['dataset']['sessions']]
+            vocab_trials, _ = train_test_split_indicies(paths, test_percentage=0,
+                                                       seed=self.args['dataset']['seed'])
+            vocab_path = self.args.get('word_vocab_path')
+            if self.args['init_from_checkpoint'] and not vocab_path:
+                raise ValueError('Resuming word training requires the original word_vocab_path')
+            self.word_tokenizer = (WordTokenizer.load(vocab_path) if vocab_path else
+                                   WordTokenizer.build(training_transcripts(vocab_trials),
+                                                       self.args.get('word_min_count', 1)))
+            self.args['dataset']['n_classes'] = len(self.word_tokenizer.tokens)
+            saved_vocab = os.path.join(self.args['checkpoint_dir'], 'word_vocab.json')
+            self.word_tokenizer.save(saved_vocab)
+            self.args['word_vocab_path'] = os.path.abspath(saved_vocab)
+            self.logger.info(f'Word vocabulary: {len(self.word_tokenizer.tokens)} classes including blank and unknown')
 
         model_config = resolve_model_config(self.args['model'])
         model_type = model_config['model_type']
@@ -221,6 +244,7 @@ class BrainToTextDecoder_Trainer:
             batch_size = self.args['dataset']['batch_size'],
             must_include_days = None,
             random_seed = self.args['dataset']['seed'],
+            word_tokenizer = self.word_tokenizer,
             feature_subset = feature_subset
             )
         self.train_loader = DataLoader(
@@ -240,6 +264,7 @@ class BrainToTextDecoder_Trainer:
             batch_size = self.args['dataset']['batch_size'],
             must_include_days = None,
             random_seed = self.args['dataset']['seed'],
+            word_tokenizer = self.word_tokenizer,
             feature_subset = feature_subset   
             )
         self.val_loader = DataLoader(
@@ -269,6 +294,14 @@ class BrainToTextDecoder_Trainer:
             raise ValueError(f"Invalid learning rate scheduler type: {self.args['lr_scheduler_type']}")
         
         self.ctc_loss = torch.nn.CTCLoss(blank = 0, reduction = 'none', zero_infinity = False)
+
+        backbone_path = self.args.get('backbone_checkpoint_path')
+        if backbone_path:
+            if self.args['init_from_checkpoint']:
+                raise ValueError('Backbone initialization and checkpoint resume are mutually exclusive')
+            target_model = getattr(self.model, '_orig_mod', self.model)
+            load_backbone(target_model, torch.load(backbone_path, weights_only=False, map_location='cpu'))
+            self.logger.info(f'Initialized backbone from {backbone_path}; output layer and optimizer are fresh')
 
         # If a checkpoint is provided, then load from checkpoint
         if self.args['init_from_checkpoint']:
@@ -402,6 +435,10 @@ class BrainToTextDecoder_Trainer:
         '''
         checkpoint = torch.load(load_path, weights_only=False, map_location='cpu') # checkpoint is just a dict
 
+        if checkpoint.get('target_type', 'phoneme') != self.target_type:
+            raise ValueError('Checkpoint target type does not match this run')
+        if self.word_tokenizer and checkpoint.get('word_vocab') != self.word_tokenizer.tokens:
+            raise ValueError('Checkpoint word vocabulary does not match this run')
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.learning_rate_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
@@ -427,7 +464,10 @@ class BrainToTextDecoder_Trainer:
             'model_state_dict' : self.model.state_dict(),
             'optimizer_state_dict' : self.optimizer.state_dict(),
             'scheduler_state_dict' : self.learning_rate_scheduler.state_dict(),
-            'val_PER' : PER,
+            'val_PER' : PER, # legacy internal selection field
+            'target_type': self.target_type,
+            'word_vocab': self.word_tokenizer.tokens if self.word_tokenizer else None,
+            'val_WER': PER if self.target_type == 'word' else None,
             'val_loss' : loss
         }
         
@@ -649,29 +689,29 @@ class BrainToTextDecoder_Trainer:
 
                 # Log info 
                 self.logger.info(f'Val batch {i}: ' +
-                        f'PER (avg): {val_metrics["avg_PER"]:.4f} ' +
+                        f'{self.error_label} (avg): {val_metrics["avg_PER"]:.4f} ' +
                         f'CTC Loss (avg): {val_metrics["avg_loss"]:.4f} ' +
                         f'time: {val_step_duration:.3f}')
                 
                 if self.args['log_individual_day_val_PER']:
                     for day in val_metrics['day_PERs'].keys():
-                        self.logger.info(f"{self.args['dataset']['sessions'][day]} val PER: {val_metrics['day_PERs'][day]['total_edit_distance'] / val_metrics['day_PERs'][day]['total_seq_length']:0.4f}")
+                        self.logger.info(f"{self.args['dataset']['sessions'][day]} val {self.error_label}: {val_metrics['day_PERs'][day]['total_edit_distance'] / val_metrics['day_PERs'][day]['total_seq_length']:0.4f}")
 
                 if writer is not None:
                     step = i + 1
                     elapsed = time.time() - train_start_time
-                    writer.add_scalar('validation/per', val_metrics['avg_PER'], step)
+                    writer.add_scalar(f'validation/{self.error_label.lower()}', val_metrics['avg_PER'], step)
                     writer.add_scalar('validation/ctc_loss', val_metrics['avg_loss'], step)
-                    writer.add_scalar('validation/best_per', min(self.best_val_PER, val_metrics['avg_PER']), step)
+                    writer.add_scalar(f'validation/best_{self.error_label.lower()}', min(self.best_val_PER, val_metrics['avg_PER']), step)
                     writer.add_scalar('timing/elapsed_seconds', elapsed, step)
                     writer.add_scalar('timing/validation_seconds', val_step_duration, step)
                     # Explicit elapsed-time axis, independent of dashboard start times.
-                    writer.add_scalar('convergence/per_by_elapsed_second',
+                    writer.add_scalar(f'convergence/{self.error_label.lower()}_by_elapsed_second',
                                       val_metrics['avg_PER'], int(elapsed))
                     for day, counts in val_metrics['day_PERs'].items():
                         if counts['total_seq_length'] > 0:
                             session = self.args['dataset']['sessions'][day]
-                            writer.add_scalar(f'validation_by_session/{session}/per',
+                            writer.add_scalar(f'validation_by_session/{session}/{self.error_label.lower()}',
                                               counts['total_edit_distance'] / counts['total_seq_length'], step)
                     writer.flush()
 
@@ -683,7 +723,7 @@ class BrainToTextDecoder_Trainer:
                 # Determine if new best day. Based on if PER is lower, or in the case of a PER tie, if loss is lower
                 new_best = False
                 if val_metrics['avg_PER'] < self.best_val_PER:
-                    self.logger.info(f"New best test PER {self.best_val_PER:.4f} --> {val_metrics['avg_PER']:.4f}")
+                    self.logger.info(f"New best validation {self.error_label} {self.best_val_PER:.4f} --> {val_metrics['avg_PER']:.4f}")
                     self.best_val_PER = val_metrics['avg_PER']
                     self.best_val_loss = val_metrics['avg_loss']
                     new_best = True
@@ -711,14 +751,14 @@ class BrainToTextDecoder_Trainer:
 
                 # Optionally save this validation checkpoint, regardless of performance
                 if self.args['save_all_val_steps']:
-                    self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/checkpoint_batch_{i}', val_metrics['avg_PER'])
+                    self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/checkpoint_batch_{i}', val_metrics['avg_PER'], val_metrics['avg_loss'])
 
                 if validation_callback is not None:
                     validation_callback(i + 1, val_metrics)
 
                 # Early stopping 
                 if early_stopping and (val_steps_since_improvement >= early_stopping_val_steps):
-                    self.logger.info(f'Overall validation PER has not improved in {early_stopping_val_steps} validation steps. Stopping training early at batch: {i}')
+                    self.logger.info(f'Overall validation {self.error_label} has not improved in {early_stopping_val_steps} validation steps. Stopping training early at batch: {i}')
                     break
                 
         # Log final training steps 
@@ -728,12 +768,12 @@ class BrainToTextDecoder_Trainer:
         if writer is not None:
             writer.add_scalar('timing/total_run_seconds', training_duration, i + 1)
 
-        self.logger.info(f'Best avg val PER achieved: {self.best_val_PER:.5f}')
+        self.logger.info(f'Best avg val {self.error_label} achieved: {self.best_val_PER:.5f}')
         self.logger.info(f'Total training time: {(training_duration / 60):.2f} minutes')
 
         # Save final model 
         if self.args['save_final_model']:
-            self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/final_checkpoint_batch_{i}', val_PERs[-1])
+            self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/final_checkpoint_batch_{i}', val_PERs[-1], val_losses[-1])
 
         train_stats = {}
         train_stats['train_losses'] = train_losses
@@ -770,6 +810,8 @@ class BrainToTextDecoder_Trainer:
 
         total_edit_distance = 0
         total_seq_length = 0
+        unknown_words = 0
+        examples = []
 
         # Calculate PER for each specific day
         day_per = {}
@@ -820,7 +862,15 @@ class BrainToTextDecoder_Trainer:
                         labels[iterIdx][0 : phone_seq_lens[iterIdx]].cpu().detach()
                     )
             
-                    batch_edit_distance += F.edit_distance(decoded_seq, trueSeq)
+                    if self.word_tokenizer is not None:
+                        reference = words(transcript_text(batch['transcriptions'][iterIdx]))
+                        prediction = [self.word_tokenizer.tokens[int(token)] for token in decoded_seq]
+                        unknown_words += sum(w not in self.word_tokenizer.ids for w in reference)
+                        batch_edit_distance += F.edit_distance(prediction, reference)
+                        if len(examples) < 10:
+                            examples.append({'reference': ' '.join(reference), 'prediction': ' '.join(prediction)})
+                    else:
+                        batch_edit_distance += F.edit_distance(decoded_seq, trueSeq)
 
                     decoded_seqs.append(decoded_seq)
 
@@ -850,10 +900,17 @@ class BrainToTextDecoder_Trainer:
             metrics['trial_nums'].append(batch['trial_nums'].numpy())
             metrics['day_indicies'].append(batch['day_indicies'].cpu().numpy())
 
+        if int(total_seq_length) == 0:
+            raise ValueError('Validation contains no enabled target words/phonemes')
         avg_PER = total_edit_distance / total_seq_length
 
         metrics['day_PERs'] = day_per
         metrics['avg_PER'] = avg_PER.item()
+        if self.word_tokenizer is not None:
+            metrics['avg_WER'] = metrics['avg_PER']
+            metrics['unknown_word_rate'] = unknown_words / max(1, int(total_seq_length))
+            metrics['examples'] = examples
+            self.logger.info(f"Validation WER: {metrics['avg_WER']:.5f}; unknown-word rate: {metrics['unknown_word_rate']:.5f}")
         metrics['avg_loss'] = np.mean(metrics['losses'])
 
         return metrics
