@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -6,29 +7,42 @@ from tensorboard.backend.event_processing.event_accumulator import (
 )
 
 # Resolve relative to this script, regardless of the launch directory.
-study_dir = (
-    Path(__file__).resolve().parent
-    / "trained_models"
-    / "052_tcn_gpu_batch64_expansion4"
-)
+study_dir = Path(__file__).resolve().parent / "trained_models"
 
-if not study_dir.is_dir():
-    raise FileNotFoundError(f"Run directory does not exist: {study_dir}")
-
-# Accept either one training run or an Optuna study containing trials.
-run_dirs = (
-    [study_dir]
-    if (study_dir / "tensorboard").is_dir()
-    else sorted(study_dir.glob("trial_*"))
+parser = argparse.ArgumentParser(
+    description="Compare TensorBoard validation PER for selected training runs."
 )
+parser.add_argument(
+    "run_names", nargs="+",
+    help="Run folders or TensorBoard event folders relative to trained_models.",
+)
+args = parser.parse_args()
+run_names = args.run_names
+run_dirs = [study_dir / name for name in run_names]
+
+for run_dir in run_dirs:
+    if not run_dir.is_dir():
+        parser.error(f"Run directory does not exist: {run_dir}")
 
 fig, ax = plt.subplots(figsize=(11, 6))
 plotted = 0
 
+labels = {
+    "001_gru_baseline/tensorboard_merged": "GRU baseline",
+    "052_tcn_gpu_batch64_expansion4": "TCN expansion 4",
+}
+
 for trial_dir in run_dirs:
-    event_dir = trial_dir / "tensorboard"
+    # Accept event directories directly, including tensorboard_merged.
+    event_dir = (
+        trial_dir
+        if list(trial_dir.glob("events.out.tfevents.*"))
+        else trial_dir / "tensorboard"
+    )
+    run_label = str(trial_dir.relative_to(study_dir))
 
     if not list(event_dir.glob("events.out.tfevents.*")):
+        print(f"{run_label}: no TensorBoard event files found in {event_dir}")
         continue
 
     # Load all scalar points, without downsampling.
@@ -40,7 +54,7 @@ for trial_dir in run_dirs:
 
     tag = "validation/per"
     if tag not in events.Tags()["scalars"]:
-        print(f"{trial_dir.name}: available tags:",
+        print(f"{run_label}: available tags:",
               events.Tags()["scalars"])
         continue
 
@@ -50,14 +64,14 @@ for trial_dir in run_dirs:
     steps = [point.step for point in points]
     per = [100 * point.value for point in points]
 
-    ax.plot(steps, per, label=trial_dir.name)
-    print(f"Loaded {len(points)} validation points from {trial_dir.name}")
+    ax.plot(steps, per, label=labels.get(run_label, run_label))
+    print(f"Loaded {len(points)} validation points from {run_label}")
     plotted += 1
 
 ax.set(
     xlabel="Training step",
     ylabel="Validation phoneme error rate (%)",
-    title=f"Validation PER: {study_dir.name}",
+    title="Training runs: validation PER",
 )
 ax.grid(alpha=0.25)
 
