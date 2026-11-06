@@ -21,13 +21,14 @@ LOAD = 'Loaded model from checkpoint: '
 SAVE = 'Saved model to checkpoint: '
 
 
-def checkpoint_boundary(previous, resumed):
+def checkpoint_boundary(previous, resumed, checkpoint_aliases=None):
     """Locate the exact checkpoint save preceding the next run's load."""
     loads = [line for line in (resumed / 'training_log').read_text().splitlines() if LOAD in line]
     if len(loads) != 1:
         raise ValueError(f'{resumed}: expected exactly one checkpoint load')
     load = loads[0]
     path = load.split(LOAD, 1)[1].strip()
+    path = (checkpoint_aliases or {}).get(path, path)
     load_time = datetime.strptime(load[:23], '%Y-%m-%d %H:%M:%S,%f')
     candidates = []
     step = None
@@ -59,10 +60,10 @@ def read_scalars(run):
     return points
 
 
-def merge(runs, output):
+def merge(runs, output, checkpoint_aliases=None):
     if output.exists():
         raise FileExistsError(f'{output} already exists; choose a fresh output directory')
-    boundaries = [checkpoint_boundary(a, b) for a, b in zip(runs, runs[1:])]
+    boundaries = [checkpoint_boundary(a, b, checkpoint_aliases) for a, b in zip(runs, runs[1:])]
     sources = [read_scalars(run) for run in runs]
     merged = []
     manifest = []
@@ -121,9 +122,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runs', nargs='+', type=Path, help='Run directories in continuation order')
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--checkpoint-alias', nargs=2, action='append', default=[],
+                        metavar=('LOADED_PATH', 'SAVED_PATH'),
+                        help='Match a renamed loaded checkpoint to its original saved path; repeatable')
     args = parser.parse_args()
     try:
-        manifest = merge(args.runs, args.output)
+        manifest = merge(args.runs, args.output, dict(args.checkpoint_alias))
     except (ValueError, FileExistsError) as exc:
         parser.error(str(exc))
     for item in manifest:
