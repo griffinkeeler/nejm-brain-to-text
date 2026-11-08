@@ -28,8 +28,8 @@ fig, ax = plt.subplots(figsize=(11, 6))
 plotted = 0
 
 labels = {
-    "001_gru_baseline/tensorboard_merged": "GRU baseline",
-    "052_tcn_gpu_batch64_expansion4": "TCN expansion 4",
+    "001_gru_baseline_merged": "GRU",
+    "tcn_search_cuda_focused_v1/trial_00019/tensorboard": "TCN",
 }
 
 for trial_dir in run_dirs:
@@ -77,6 +77,7 @@ ax.grid(alpha=0.25)
 
 # Hide the very large initial PER to make convergence easier to see.
 ax.set_ylim(0, 50)
+ax.set_xlim(0, 7000)  # Show training steps 0–8,000
 
 if plotted:
     ax.legend(title="Run", bbox_to_anchor=(1.02, 1),
