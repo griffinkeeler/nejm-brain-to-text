@@ -1,4 +1,10 @@
-"""Sequential Optuna TPE search using the existing TCN trainer and validation set."""
+"""Sequential Optuna TPE search using the existing TCN trainer and validation set.
+
+The original focused CUDA search used for trials 19 and 38 is preserved in
+``tune_tcn_focused_v1.py`` (the full pasted script, including fixed settings).
+Keep that version unchanged; use a new output directory and study name when
+changing the search space here for the next experiment.
+"""
 
 import argparse
 import gc
